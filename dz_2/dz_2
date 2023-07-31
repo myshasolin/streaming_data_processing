@@ -1,0 +1,302 @@
+# ЗАДАНИЕ 1
+# создадим топик
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-topics.sh --create --topic dz2 --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+Created topic dz2.
+
+# проверим список топиков и убедимся в том, что наш новый там появился:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-topics.sh --list --bootstrap-server localhost:9092
+Lesson2
+__consumer_offsets
+dz2
+
+# в одном окне создадим продюсера, в другом консьюмера, данные отправим и получим, причём 
+# консьюмера перезапустим с параметром --from-beginning и без него, чтоб посмотреть, как он получает данные:
+
+# вот терминал с брокером:
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-console-producer.sh --broker-list localhost:9092 --topic dz2
+>one!
+>two!
+>three!
+>four!
+>five!
+>six!
+>
+
+# а вот с потребителем (консьюмером):
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dz2 --from-beginning
+one!
+two!
+three!
+^Z
+[1]+  Stopped                 ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dz2 --from-beginning
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dz2four!
+five!
+^Z
+[2]+  Stopped                 ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dz2
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dz2 --from-beginning
+one!
+two!
+three!
+four!
+five!
+six!
+
+--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//
+
+# ЗАДАНИЕ 2
+# перед взаимодействием с очередью при помощи Spark следует проверить версии Spark, Scala и Kafka
+# а иначе в самые неподходящие моменты могут вылезать разные тркднопонимаемые ошибки:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# spark-submit --version
+23/07/31 06:09:42 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/07/31 06:09:42 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /___/ .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+                        
+Using Scala version 2.12.15, Java HotSpot(TM) 64-Bit Server VM, 11.0.13
+Branch HEAD
+Compiled by user yumwang on 2022-10-15T09:47:01Z
+Revision fbbcf9434ac070dd4ced4fb9efe32899c6db12a9
+Url https://github.com/apache/spark
+Type --help for more information.
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-server-start.sh --version
+[2023-07-31 06:10:16,255] INFO Registered kafka:type=kafka.Log4jController MBean (kafka.utils.Log4jControllerRegistration$)
+3.3.1 (Commit:e23c59d00e687ff5)
+
+# с этими версиями и подключимся к Spark-сессии с настройкой параметра --packages 
+# для добавления возможности чтения сообщений из Kafka
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1
+Python 3.10.6 (main, May 29 2023, 11:10:38) [GCC 11.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/07/31 06:17:26 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/07/31 06:17:26 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+:: resolving dependencies :: org.apache.spark#spark-submit-parent-2ffd35eb-435d-4712-8cec-4a45add4c49b;1.0
+        confs: [default]
+        found org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.hadoop#hadoop-client-runtime;3.3.2 in central
+        found org.spark-project.spark#unused;1.0.0 in central
+        found org.apache.hadoop#hadoop-client-api;3.3.2 in central
+        found org.xerial.snappy#snappy-java;1.1.8.4 in central
+        found org.slf4j#slf4j-api;1.7.32 in central
+        found commons-logging#commons-logging;1.1.3 in central
+        found com.google.code.findbugs#jsr305;3.0.0 in central
+        found org.apache.commons#commons-pool2;2.11.1 in central
+        found org.apache.kafka#kafka-clients;3.3.1 in central
+        found com.github.luben#zstd-jni;1.5.2-1 in central
+        found org.lz4#lz4-java;1.8.0 in central
+        found org.slf4j#slf4j-api;1.7.36 in central
+:: resolution report :: resolve 2188ms :: artifacts dl 79ms
+        :: modules in use:
+        com.github.luben#zstd-jni;1.5.2-1 from central in [default]
+        com.google.code.findbugs#jsr305;3.0.0 from central in [default]
+        commons-logging#commons-logging;1.1.3 from central in [default]
+        org.apache.commons#commons-pool2;2.11.1 from central in [default]
+        org.apache.hadoop#hadoop-client-api;3.3.2 from central in [default]
+        org.apache.hadoop#hadoop-client-runtime;3.3.2 from central in [default]
+        org.apache.kafka#kafka-clients;3.3.1 from central in [default]
+        org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.lz4#lz4-java;1.8.0 from central in [default]
+        org.slf4j#slf4j-api;1.7.36 from central in [default]
+        org.spark-project.spark#unused;1.0.0 from central in [default]
+        org.xerial.snappy#snappy-java;1.1.8.4 from central in [default]
+        :: evicted modules:
+        org.apache.kafka#kafka-clients;2.8.1 by [org.apache.kafka#kafka-clients;3.3.1] in [default]
+        org.slf4j#slf4j-api;1.7.32 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   15  |   0   |   0   |   2   ||   13  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-2ffd35eb-435d-4712-8cec-4a45add4c49b
+        confs: [default]
+        0 artifacts copied, 13 already retrieved (0kB/59ms)
+23/07/31 06:17:31 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.6 (main, May 29 2023 11:10:38)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1690773457701).
+SparkSession available as 'spark'.
+>>> 
+
+# создадим датафрейм из данных топика и посмотрим на него:
+
+>>> df = spark.read.format("kafka") \
+...     .option("subscribe", "dz2") \
+...     .option("kafka.bootstrap.servers", "localhost:9092") \
+...     .load()
+>>> df.show()
++----+-------------------+-----+---------+------+--------------------+-------------+                                      
+| key|              value|topic|partition|offset|           timestamp|timestampType|
++----+-------------------+-----+---------+------+--------------------+-------------+
+|null|      [6F 6E 65 21]|  dz2|        0|     0|2023-07-31 06:03:...|            0|
+|null|      [74 77 6F 21]|  dz2|        0|     1|2023-07-31 06:03:...|            0|
+|null|[74 68 72 65 65 21]|  dz2|        0|     2|2023-07-31 06:03:...|            0|
+|null|   [66 6F 75 72 21]|  dz2|        0|     3|2023-07-31 06:04:...|            0|
+|null|   [66 69 76 65 21]|  dz2|        0|     4|2023-07-31 06:04:...|            0|
+|null|      [73 69 78 21]|  dz2|        0|     5|2023-07-31 06:04:...|            0|
++----+-------------------+-----+---------+------+--------------------+-------------+
+
+# уберём бинарное представление у ключей и значений, выведем столбцы key, value, partition и offset, 
+# обрезав offset сверху и снизу и очтавив offset=2 и 3:
+
+>>> from pyspark.sql import functions as F
+>>> df_s = spark.read.format("kafka") \
+...     .option("subscribe", "dz2") \
+...     .option("kafka.bootstrap.servers", "localhost:9092") \
+...     .option("startingOffsets", '{"dz2":{"0":2}}') \
+...     .option("endingOffsets", '{"dz2":{"0":4}}') \
+...     .load()
+>>> df_slice = df_s.select(F.col("key").cast("String").alias("key"),
+...                        F.col("value").cast("String").alias("value"),
+...                        "partition", "offset"
+... )
+>>> df_slice.show()
++----+------+---------+------+                                                                                            
+| key| value|partition|offset|
++----+------+---------+------+
+|null|three!|        0|     2|
+|null| four!|        0|     3|
++----+------+---------+------+
+
+# допишем сообщение в топик через Spark и выведем его полностью:
+
+>>> df_temp = spark.sql("SELECT 'new_key' AS key, 'seven!' AS value")
+>>> df_temp.write.format("kafka") \
+...     .option("kafka.bootstrap.servers", "localhost:9092") \
+...     .option("topic", "dz2") \
+...     .save()
+>>> df_s = spark.read.format("kafka") \                                                                                   
+...     .option("subscribe", "dz2") \
+...     .option("kafka.bootstrap.servers", "localhost:9092") \
+...     .load()
+>>> df = df_s.select(F.col("key").cast("String").alias("key"),
+...                  F.col("value").cast("String").alias("value"),
+...                  "partition", "offset"
+... )
+>>> df.show()
++-------+------+---------+------+                                                                                         
+|    key| value|partition|offset|
++-------+------+---------+------+
+|   null|  one!|        0|     0|
+|   null|  two!|        0|     1|
+|   null|three!|        0|     2|
+|   null| four!|        0|     3|
+|   null| five!|        0|     4|
+|   null|  six!|        0|     5|
+|new_key|seven!|        0|     6|
++-------+------+---------+------+
+
+--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//--//
+
+# ЗАДАНИЕ 3
+# для записи csv-файла в Kafka в виде JSON возьмём файл про переделанные ирисы с первого задания:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# hdfs dfs -ls /mysha/dz2/
+Found 1 items
+-rw-r--r--   1 root supergroup        258 2023-07-31 06:55 /mysha/dz2/iris_fifty_lines.csv
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# hdfs dfs -cat /mysha/dz2/iris_fifty_lines.csv
+Letters,sepal length (cm),sepal width (cm),petal length (cm),petal width (cm)
+A,5.1,3.5,1.4,0.2
+B,4.9,3.0,1.4,0.2
+C,4.7,3.2,1.3,0.2
+D,4.6,3.1,1.5,0.2
+E,5.0,3.6,1.4,0.2
+A,5.4,3.9,1.7,0.4
+B,4.6,3.4,1.4,0.3
+C,5.0,3.4,1.5,0.2
+D,4.4,2.9,1.4,0.2
+E,4.9,3.1,1.5,0.1
+
+# создадим под эти данные топик:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./kafka-topics.sh --create --topic iris --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+
+# напишем скрипт для коныертвции файла из csv в JSON:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# nano file_to_kafka.py
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# chmod +x file_to_kafka.py
+
+# вот какой скрипт в файле: 
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# cat file_to_kafka.py 
+#!/usr/bin/python3
+import pandas as pd
+from kafka import KafkaProducer
+import json
+import subprocess
+
+# Скачать файл из HDFS
+subprocess.call(['hdfs', 'dfs', '-get', '/mysha/dz2/iris_fifty_lines.csv', 'iris_fifty_lines.csv'])
+
+# Прочитать CSV-файл в объект Pandas DataFrame
+df = pd.read_csv('iris_fifty_lines.csv')
+
+# Преобразовать DataFrame в список словарей
+data = df.to_dict(orient='records')
+
+# Отправить данные в топик Kafka
+producer = KafkaProducer(
+    bootstrap_servers=['localhost:9092'],
+    value_serializer=lambda x: json.dumps(x).encode('utf-8')
+)
+
+for record in data:
+    producer.send('iris', record)
+
+producer.close()
+
+# запустим скрипт: 
+ 
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# ./file_to_kafka.py 
+
+# проверим, преобразовались ли данные в JSON и записались ли в топик:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic iris --from-beginning
+{"Letters": "A", "sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "B", "sepal length (cm)": 4.9, "sepal width (cm)": 3.0, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "C", "sepal length (cm)": 4.7, "sepal width (cm)": 3.2, "petal length (cm)": 1.3, "petal width (cm)": 0.2}
+{"Letters": "D", "sepal length (cm)": 4.6, "sepal width (cm)": 3.1, "petal length (cm)": 1.5, "petal width (cm)": 0.2}
+{"Letters": "E", "sepal length (cm)": 5.0, "sepal width (cm)": 3.6, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "A", "sepal length (cm)": 5.4, "sepal width (cm)": 3.9, "petal length (cm)": 1.7, "petal width (cm)": 0.4}
+{"Letters": "B", "sepal length (cm)": 4.6, "sepal width (cm)": 3.4, "petal length (cm)": 1.4, "petal width (cm)": 0.3}
+{"Letters": "C", "sepal length (cm)": 5.0, "sepal width (cm)": 3.4, "petal length (cm)": 1.5, "petal width (cm)": 0.2}
+{"Letters": "D", "sepal length (cm)": 4.4, "sepal width (cm)": 2.9, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "E", "sepal length (cm)": 4.9, "sepal width (cm)": 3.1, "petal length (cm)": 1.5, "petal width (cm)": 0.1}
+{"Letters": "A", "sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "B", "sepal length (cm)": 4.9, "sepal width (cm)": 3.0, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "C", "sepal length (cm)": 4.7, "sepal width (cm)": 3.2, "petal length (cm)": 1.3, "petal width (cm)": 0.2}
+{"Letters": "D", "sepal length (cm)": 4.6, "sepal width (cm)": 3.1, "petal length (cm)": 1.5, "petal width (cm)": 0.2}
+{"Letters": "E", "sepal length (cm)": 5.0, "sepal width (cm)": 3.6, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "A", "sepal length (cm)": 5.4, "sepal width (cm)": 3.9, "petal length (cm)": 1.7, "petal width (cm)": 0.4}
+{"Letters": "B", "sepal length (cm)": 4.6, "sepal width (cm)": 3.4, "petal length (cm)": 1.4, "petal width (cm)": 0.3}
+{"Letters": "C", "sepal length (cm)": 5.0, "sepal width (cm)": 3.4, "petal length (cm)": 1.5, "petal width (cm)": 0.2}
+{"Letters": "D", "sepal length (cm)": 4.4, "sepal width (cm)": 2.9, "petal length (cm)": 1.4, "petal width (cm)": 0.2}
+{"Letters": "E", "sepal length (cm)": 4.9, "sepal width (cm)": 3.1, "petal length (cm)": 1.5, "petal width (cm)": 0.1}
+
+
+успешный успех! радуемся хлопаем в ладоши)
+
+
