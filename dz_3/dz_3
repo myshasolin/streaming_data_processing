@@ -1,0 +1,495 @@
+# ЗАДАНИЕ:
+# Создать свой топик/топики, загрузить туда через консоль осмысленные данные с kaggle. Лучше в формате json. Много сообщений не нужно, достаточно штук 10-100.
+
+# РЕШЕНИЕ:
+# за основу взял датасет Spotify: https://www.kaggle.com/datasets/joebeachcapital/top-10000-spotify-songs-1960-now
+# это 10000 песен, популярных на музыкальной сцене с 1958-го года по май 2023-го года
+# в датафрейме я оставил столбцы:
+# - Track Name - название трека
+# - Artist Name(s) - артист
+# - Album Name - название альбома
+# - Album Release Date - дата релиза
+# - Popularity - рейтинг на основе ARIA и Billboard-чартов
+
+
+# вот как выглядит csv-файл, посмотрим на первые 10 его строк:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# cat top_spotify.csv | head -n 5
+Track Name,Artist Name(s),Album Name,Album Release Date,Popularity
+Justified & Ancient - Stand by the Jams,The KLF,Songs Collection,1992-08-03,0
+I Know You Want Me (Calle Ocho),Pitbull,Pitbull Starring In Rebelution,2009-10-23,64
+From the Bottom of My Broken Heart,Britney Spears,...Baby One More Time (Digital Deluxe Version),1999-01-12,56
+Apeman - 2014 Remastered Version,The Kinks,"Lola vs. Powerman and the Moneygoround, Pt. One + Percy (Super Deluxe)",2014-10-20,42
+
+# а вот скрипт, с помощью которого мы этот файл переведём из csv в JSON 
+# (без соблюдения порядка строк, т.к. JSON - это всё же не про порядок строк, поэтому я не стал им заморачиваться):
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# cat csv_to_json.py 
+#!/usr/bin/python3
+
+import json
+import csv
+import os
+import sys
+
+def get_json(csv_file_path):
+    csvfile = open(csv_file_path, 'r')
+    csv_dir, csv_filename = os.path.split(csv_file_path)
+    jsonfile_path = os.path.join(csv_dir, csv_filename.replace('.csv', '.json'))
+    jsonfile = open(jsonfile_path, 'w')
+
+    reader = csv.reader(csvfile)
+    header = next(reader)
+    for row in reader:
+        json_data = {}
+        for i in range(len(header)):
+            json_data[header[i].strip()] = row[i].strip()
+        json.dump(json_data, jsonfile)
+        jsonfile.write('\n')
+    
+    csvfile.close()
+    jsonfile.close()
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('Должно быть два аргумента: python3 csv_to_json.py <csv_file_path>')
+        sys.exit(1)
+    if len(sys.argv) > 2:
+        print('Используются первые два аргумента, остальные игнорируются')
+    
+    csv_file_path = sys.argv[1]
+    get_json(csv_file_path)
+    
+# применим скрипт к csv и посмотрим на первые 10 строк результата:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# python3 csv_to_json.py top_spotify.csv 
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# cat top_spotify.json | head -n 5
+{"Track Name": "Justified & Ancient - Stand by the Jams", "Artist Name(s)": "The KLF", "Album Name": "Songs Collection", "Album Release Date": "1992-08-03", "Popularity": "0"}
+{"Track Name": "I Know You Want Me (Calle Ocho)", "Artist Name(s)": "Pitbull", "Album Name": "Pitbull Starring In Rebelution", "Album Release Date": "2009-10-23", "Popularity": "64"}
+{"Track Name": "From the Bottom of My Broken Heart", "Artist Name(s)": "Britney Spears", "Album Name": "...Baby One More Time (Digital Deluxe Version)", "Album Release Date": "1999-01-12", "Popularity": "56"}
+{"Track Name": "Apeman - 2014 Remastered Version", "Artist Name(s)": "The Kinks", "Album Name": "Lola vs. Powerman and the Moneygoround, Pt. One + Percy (Super Deluxe)", "Album Release Date": "2014-10-20", "Popularity": "42"}
+{"Track Name": "You Can't Always Get What You Want", "Artist Name(s)": "The Rolling Stones", "Album Name": "Let It Bleed", "Album Release Date": "1969-12-05", "Popularity": "0"}
+
+# ура, файл готов, идём дальще - создадим новый топик под названием dz3:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# find / -name kafka-topics.sh
+/home/hsk/kafka/bin/kafka-topics.sh
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# cd /home/hsk/kafka/bin/
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# kafka-topics.sh --create --topic dz3 --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+Created topic dz3.
+
+# заливаем json-файл в топик и прочитаем содержимое топика (первые 5 сообщений) без создания Spark-сессии:
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# kafka-console-producer.sh --topic dz3 --bootstrap-server localhost:9092 < /home/GeekBrains/dz3/top_spotify.json 
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# kafka-console-consumer.sh --topic dz3 --bootstrap-server localhost:9092 --from-beginning --max-messages 5
+{"Track Name": "Justified & Ancient - Stand by the Jams", "Artist Name(s)": "The KLF", "Album Name": "Songs Collection", "Album Release Date": "1992-08-03", "Popularity": "0"}
+{"Track Name": "I Know You Want Me (Calle Ocho)", "Artist Name(s)": "Pitbull", "Album Name": "Pitbull Starring In Rebelution", "Album Release Date": "2009-10-23", "Popularity": "64"}
+{"Track Name": "From the Bottom of My Broken Heart", "Artist Name(s)": "Britney Spears", "Album Name": "...Baby One More Time (Digital Deluxe Version)", "Album Release Date": "1999-01-12", "Popularity": "56"}
+{"Track Name": "Apeman - 2014 Remastered Version", "Artist Name(s)": "The Kinks", "Album Name": "Lola vs. Powerman and the Moneygoround, Pt. One + Percy (Super Deluxe)", "Album Release Date": "2014-10-20", "Popularity": "42"}
+{"Track Name": "You Can't Always Get What You Want", "Artist Name(s)": "The Rolling Stones", "Album Name": "Let It Bleed", "Album Release Date": "1969-12-05", "Popularity": "0"}
+Processed a total of 5 messages
+
+# подключимся к Spark c пакетом зависимостей Kafka (версии Spark=3.3.1, Kafka=3.3.1, Scala=2.12.15):
+
+root@mysha-Inspiron-11-3147:/home/hsk/kafka/bin# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/08/07 23:35:35 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/08/07 23:35:35 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+:: resolving dependencies :: org.apache.spark#spark-submit-parent-9a945368-0e38-4c6c-a322-82676cc07148;1.0
+        confs: [default]
+        found org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.hadoop#hadoop-client-runtime;3.3.2 in central
+        found org.spark-project.spark#unused;1.0.0 in central
+        found org.apache.hadoop#hadoop-client-api;3.3.2 in central
+        found org.xerial.snappy#snappy-java;1.1.8.4 in central
+        found org.slf4j#slf4j-api;1.7.32 in central
+        found commons-logging#commons-logging;1.1.3 in central
+        found com.google.code.findbugs#jsr305;3.0.0 in central
+        found org.apache.commons#commons-pool2;2.11.1 in central
+        found org.apache.kafka#kafka-clients;3.3.1 in central
+        found com.github.luben#zstd-jni;1.5.2-1 in central
+        found org.lz4#lz4-java;1.8.0 in central
+        found org.slf4j#slf4j-api;1.7.36 in central
+:: resolution report :: resolve 2924ms :: artifacts dl 109ms
+        :: modules in use:
+        com.github.luben#zstd-jni;1.5.2-1 from central in [default]
+        com.google.code.findbugs#jsr305;3.0.0 from central in [default]
+        commons-logging#commons-logging;1.1.3 from central in [default]
+        org.apache.commons#commons-pool2;2.11.1 from central in [default]
+        org.apache.hadoop#hadoop-client-api;3.3.2 from central in [default]
+        org.apache.hadoop#hadoop-client-runtime;3.3.2 from central in [default]
+        org.apache.kafka#kafka-clients;3.3.1 from central in [default]
+        org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.lz4#lz4-java;1.8.0 from central in [default]
+        org.slf4j#slf4j-api;1.7.36 from central in [default]
+        org.spark-project.spark#unused;1.0.0 from central in [default]
+        org.xerial.snappy#snappy-java;1.1.8.4 from central in [default]
+        :: evicted modules:
+        org.apache.kafka#kafka-clients;2.8.1 by [org.apache.kafka#kafka-clients;3.3.1] in [default]
+        org.slf4j#slf4j-api;1.7.32 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   15  |   0   |   0   |   2   ||   13  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-9a945368-0e38-4c6c-a322-82676cc07148
+        confs: [default]
+        0 artifacts copied, 13 already retrieved (0kB/56ms)
+23/08/07 23:35:41 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1691440548099).
+SparkSession available as 'spark'.
+>>> 
+
+# прочитаем топик не в стриме, а просто одним батчем с самого его начала и выведем в консоль 5 строк:
+
+>>> from pyspark.sql import functions as F
+>>> from pyspark.sql.types import StructType, StructField, StringType
+>>> def console_output(df, freq):
+...     return  df.writeStream \
+...         .format("console") \
+...         .trigger(processingTime=f"{freq} seconds") \
+...         .option("truncate", True) \
+...         .start()
+... 
+>>> kafka_brokers = "localhost:9092"
+>>> raw_orders = spark.read.format("kafka") \
+...     .option("kafka.bootstrap.servers", kafka_brokers) \
+...     .option("subscribe", "dz3") \
+...     .option("startingOffsets", "earliest") \
+...     .load()
+>>> raw_orders.show(5)
++----+--------------------+-----+---------+------+--------------------+-------------+                                                                                                                                                                     
+| key|               value|topic|partition|offset|           timestamp|timestampType|
++----+--------------------+-----+---------+------+--------------------+-------------+
+|null|[7B 22 54 72 61 6...|  dz3|        0|     0|2023-08-07 23:23:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0|     1|2023-08-07 23:23:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0|     2|2023-08-07 23:23:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0|     3|2023-08-07 23:23:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0|     4|2023-08-07 23:23:...|            0|
++----+--------------------+-----+---------+------+--------------------+-------------+
+only showing top 5 rows
+
+# прочитаем этот же топик, но теперь уже с конца батчами по 5 сообщений раз в 10 секунд:
+# для этого переопределим raw_orders и запустим стрим:
+
+>>> raw_orders = spark.readStream.format("kafka") \
+...     .option("kafka.bootstrap.servers", kafka_brokers) \
+...     .option("subscribe", "dz3") \
+...     .option("startingOffsets", "latest") \
+...     .option("maxOffsetsPerTrigger", "5") \
+...     .load()
+>>> out = console_output(raw_orders, 10)
+23/08/08 00:04:34 WARN ResolveWriteToStream: Temporary checkpoint location created which is deleted normally when the query didn't fail: /tmp/temporary-e56232b2-2840-4ffc-9e02-370c805a4751. If it's required to delete it under any circumstances, please set spark.sql.streaming.forceDeleteTempCheckpointLocation to true. Important to know deleting temp checkpoint folder is best effort.
+23/08/08 00:04:37 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+
+# а в другом терминале добавим в топик 20 новых сообщений:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# head -n 20 top_spotify.json > top_spotify20.json
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# ls
+csv_to_json.py  top_spotify.csv  top_spotify.json  top_spotify20.json
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# /home/hsk/kafka/bin/kafka-console-producer.sh --topic dz3 --bootstrap-server localhost:9092 < /home/GeekBrains/dz3/top_spotify20.json 
+
+# после добавления 20-ти сообщений в топик они выводятся в первом терминале батчами по 5 строк раз в 10 секунд:
+
+>>> -------------------------------------------
+Batch: 0
+-------------------------------------------
++---+-----+-----+---------+------+---------+-------------+
+|key|value|topic|partition|offset|timestamp|timestampType|
++---+-----+-----+---------+------+---------+-------------+
++---+-----+-----+---------+------+---------+-------------+
+
+[Stage 2:>                                                                                                                                                                                                                                    (0 + 1                                                                                                                                                                                                                                                    -------------------------------------------
+Batch: 1
+-------------------------------------------
++----+--------------------+-----+---------+------+--------------------+-------------+
+| key|               value|topic|partition|offset|           timestamp|timestampType|
++----+--------------------+-----+---------+------+--------------------+-------------+
+|null|[7B 22 54 72 61 6...|  dz3|        0|  9999|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10000|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10001|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10002|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10003|2023-08-08 00:05:...|            0|
++----+--------------------+-----+---------+------+--------------------+-------------+
+
+-------------------------------------------
+Batch: 2
+-------------------------------------------
++----+--------------------+-----+---------+------+--------------------+-------------+
+| key|               value|topic|partition|offset|           timestamp|timestampType|
++----+--------------------+-----+---------+------+--------------------+-------------+
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10004|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10005|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10006|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10007|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10008|2023-08-08 00:05:...|            0|
++----+--------------------+-----+---------+------+--------------------+-------------+
+
+-------------------------------------------
+Batch: 3
+-------------------------------------------
++----+--------------------+-----+---------+------+--------------------+-------------+
+| key|               value|topic|partition|offset|           timestamp|timestampType|
++----+--------------------+-----+---------+------+--------------------+-------------+
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10009|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10010|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10011|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10012|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10013|2023-08-08 00:05:...|            0|
++----+--------------------+-----+---------+------+--------------------+-------------+
+
+-------------------------------------------
+Batch: 4
+-------------------------------------------
++----+--------------------+-----+---------+------+--------------------+-------------+
+| key|               value|topic|partition|offset|           timestamp|timestampType|
++----+--------------------+-----+---------+------+--------------------+-------------+
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10014|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10015|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10016|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10017|2023-08-08 00:05:...|            0|
+|null|[7B 22 54 72 61 6...|  dz3|        0| 10018|2023-08-08 00:05:...|            0|
++----+--------------------+-----+---------+------+--------------------+-------------+
+
+out.stop()
+>>> 
+
+# теперь оставим от топика на вывод только десериализованный столбец value и столбцы topic и offset
+# для этого зададим схему данных:
+
+>>> my_schema = StructType([
+...     StructField("Track Name", StringType()),
+...     StructField("Artist Name(s)", StringType()),
+...     StructField("Album Name", StringType()),
+...     StructField("Album Release Date", StringType()),
+...     StructField("Popularity", StringType())
+... ])
+>>> raw_orders = spark.readStream.format("kafka") \
+...     .option("kafka.bootstrap.servers", kafka_brokers) \
+...     .option("subscribe", "dz3") \
+...     .option("startingOffsets", "earliest") \
+...     .option("maxOffsetsPerTrigger", "5") \
+...     .load()
+>>> value_orders = raw_orders.select(F.from_json(F.col("value").cast("String"), my_schema).alias("value"),
+...                                  "topic",
+...                                  "offset")
+
+# посмотрим схему:
+
+>>> value_orders.printSchema()
+root
+ |-- value: struct (nullable = true)
+ |    |-- Track Name: string (nullable = true)
+ |    |-- Artist Name(s): string (nullable = true)
+ |    |-- Album Name: string (nullable = true)
+ |    |-- Album Release Date: string (nullable = true)
+ |    |-- Popularity: string (nullable = true)
+ |-- topic: string (nullable = true)
+ |-- offset: long (nullable = true)
+ 
+# схема многомерная, глубокая, нам такая не подходит, снизим размерность и ещё раз посмотрим её:
+
+>>> parsed_orders = value_orders.select("value.*", "topic", "offset")
+>>> parsed_orders.printSchema()
+root
+ |-- Track Name: string (nullable = true)
+ |-- Artist Name(s): string (nullable = true)
+ |-- Album Name: string (nullable = true)
+ |-- Album Release Date: string (nullable = true)
+ |-- Popularity: string (nullable = true)
+ |-- topic: string (nullable = true)
+ |-- offset: long (nullable = true)
+ 
+# вот теперь с размерностью всё в порядке. Запустим стрим с начала записей и с созданием checkpoint
+# для этого переопределим метод записи потока, указав в нём директорию для чекпоинта на HDFS:
+
+>>> def console_output_ckeckpointed(df, freq):
+...     return  df.writeStream \
+...         .format("console") \
+...         .trigger(processingTime=f'{freq} seconds') \
+...         .option("truncate", False) \
+...         .option("checkpointLocation", "/mysha/lesson3/spotify_checkpoint") \
+...         .start()
+
+# запустим стрим и через несколько батчей остановим его:
+
+>>> out = console_output_ckeckpointed(parsed_orders, 15)
+23/08/08 00:36:40 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+[Stage 6:>                                                                                                                                                                                                                                                                                                                                -------------------------------------------                                          
+Batch: 0
+-------------------------------------------
++---------------------------------------+------------------+----------------------------------------------------------------------+------------------+----------+-----+------+
+|Track Name                             |Artist Name(s)    |Album Name                                                            |Album Release Date|Popularity|topic|offset|
++---------------------------------------+------------------+----------------------------------------------------------------------+------------------+----------+-----+------+
+|Justified & Ancient - Stand by the Jams|The KLF           |Songs Collection                                                      |1992-08-03        |0         |dz3  |0     |
+|I Know You Want Me (Calle Ocho)        |Pitbull           |Pitbull Starring In Rebelution                                        |2009-10-23        |64        |dz3  |1     |
+|From the Bottom of My Broken Heart     |Britney Spears    |...Baby One More Time (Digital Deluxe Version)                        |1999-01-12        |56        |dz3  |2     |
+|Apeman - 2014 Remastered Version       |The Kinks         |Lola vs. Powerman and the Moneygoround, Pt. One + Percy (Super Deluxe)|2014-10-20        |42        |dz3  |3     |
+|You Can't Always Get What You Want     |The Rolling Stones|Let It Bleed                                                          |1969-12-05        |0         |dz3  |4     |
++---------------------------------------+------------------+----------------------------------------------------------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 1
+-------------------------------------------
++-------------------------------------------------------+----------------------------+---------------------------------------------+------------------+----------+-----+------+
+|Track Name                                             |Artist Name(s)              |Album Name                                   |Album Release Date|Popularity|topic|offset|
++-------------------------------------------------------+----------------------------+---------------------------------------------+------------------+----------+-----+------+
+|Don't Stop - 2004 Remaster                             |Fleetwood Mac               |Rumours                                      |1977-02-04        |79        |dz3  |5     |
+|Eastside (with Halsey & Khalid)                        |benny blanco, Halsey, Khalid|Eastside (with Halsey & Khalid)              |2018-07-12        |78        |dz3  |6     |
+|Something About The Way You Look Tonight - Edit Version|Elton John                  |Candle In The Wind 1997 / Something About ...|1997-01-01        |61        |dz3  |7     |
+|Juke Box Hero                                          |Foreigner                   |4 (Expanded)                                 |1981              |74        |dz3  |8     |
+|Mercy                                                  |Shawn Mendes                |Illuminate (Deluxe)                          |2016-09-23        |0         |dz3  |9     |
++-------------------------------------------------------+----------------------------+---------------------------------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 2
+-------------------------------------------
++------------------------------------+------------------------+-----------------------+------------------+----------+-----+------+
+|Track Name                          |Artist Name(s)          |Album Name             |Album Release Date|Popularity|topic|offset|
++------------------------------------+------------------------+-----------------------+------------------+----------+-----+------+
+|It's Like That                      |Run–D.M.C., Jason Nevins|The Greatest Hits      |2002-09-10        |68        |dz3  |10    |
+|Here Without You                    |3 Doors Down            |Away From The Sun      |2002-11-12        |80        |dz3  |11    |
+|Listen to the Band - Single Version |The Monkees             |The Best of The Monkees|2003              |31        |dz3  |12    |
+|With A Little Luck - Remastered 1993|Wings                   |London Town            |1978-03-31        |0         |dz3  |13    |
+|Sing                                |Ed Sheeran              |x (Deluxe Edition)     |2014-06-21        |73        |dz3  |14    |
++------------------------------------+------------------------+-----------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 3
+-------------------------------------------
++-----------------------------------------------------+--------------------------+-----------------------------------------------------+------------------+----------+-----+------+
+|Track Name                                           |Artist Name(s)            |Album Name                                           |Album Release Date|Popularity|topic|offset|
++-----------------------------------------------------+--------------------------+-----------------------------------------------------+------------------+----------+-----+------+
+|Mississippi                                          |Pussycat                  |First Of All                                         |1976-01-01        |58        |dz3  |15    |
+|Flava                                                |Nathaniel                 |Yours                                                |2016-01-01        |5         |dz3  |16    |
+|Baby Sittin' Boogie - Radio Version                  |Buzz Clifford             |Rock & Roll 50s & 60s Mix                            |2016-10-01        |6         |dz3  |17    |
+|Dr. Love                                             |Tina Charles              |Dance Little Lady                                    |2012-03-20        |15        |dz3  |18    |
+|Landslide (Glee Cast Version) (feat. Gwyneth Paltrow)|Glee Cast, Gwyneth Paltrow|Landslide (Glee Cast Version) (feat. Gwyneth Paltrow)|2011-03-08        |0         |dz3  |19    |
++-----------------------------------------------------+--------------------------+-----------------------------------------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 4
+-------------------------------------------
++-------------------------------------------------+-----------------------------+----------------------------------------+------------------+----------+-----+------+
+|Track Name                                       |Artist Name(s)               |Album Name                              |Album Release Date|Popularity|topic|offset|
++-------------------------------------------------+-----------------------------+----------------------------------------+------------------+----------+-----+------+
+|I'm Free                                         |The Soup Dragons, Junior Reid|20 Golden Greats                        |2012              |0         |dz3  |20    |
+|Writing's On The Wall - From "Spectre" Soundtrack|Sam Smith                    |Writing's On The Wall                   |2015-09-25        |68        |dz3  |21    |
+|If You Can't Give Me Love - 2017 Remaster        |Suzi Quatro                  |If You Knew Suzi… (2017 Remaster)       |1978-08-12        |0         |dz3  |22    |
+|Take Yourself Home                               |Troye Sivan                  |Take Yourself Home                      |2020-04-01        |0         |dz3  |23    |
+|Give It Up                                       |KC & The Sunshine Band       |All In a Night's Work (Expanded Version)|2016-03-11        |73        |dz3  |24    |
++-------------------------------------------------+-----------------------------+----------------------------------------+------------------+----------+-----+------+
+
+out.stop()
+>>> 
+
+# мы остановились на Batch=5 и offset=24. Запустим стрим ещё раз и убедимся в том, что он не начнётся
+# с самого начала, а продолжится с того места, на котором мы в последний раз остановились:
+
+>>> out = console_output_ckeckpointed(parsed_orders, 15)
+23/08/08 00:40:44 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+>>> -------------------------------------------
+Batch: 5
+-------------------------------------------
++-------------------------------+--------------+---------------------------+------------------+----------+-----+------+
+|Track Name                     |Artist Name(s)|Album Name                 |Album Release Date|Popularity|topic|offset|
++-------------------------------+--------------+---------------------------+------------------+----------+-----+------+
+|Homecoming                     |Hey Monday    |Hold On Tight              |2008-10-07        |47        |dz3  |25    |
+|Funhouse - Main Version - Clean|P!nk          |La Guestlist               |2009-10-19        |24        |dz3  |26    |
+|Dangerous Woman                |Ariana Grande |Dangerous Woman            |2016-05-20        |0         |dz3  |27    |
+|Abergavenny                    |Marty Wilde   |The Full Marty             |2010-01-01        |33        |dz3  |28    |
+|That's All You Gotta Do        |Brenda Lee    |Ultimate Collection, Vol. 1|2015-03-06        |9         |dz3  |29    |
++-------------------------------+--------------+---------------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 6
+-------------------------------------------
++--------------------------+----------------+---------------------------------+------------------+----------+-----+------+
+|Track Name                |Artist Name(s)  |Album Name                       |Album Release Date|Popularity|topic|offset|
++--------------------------+----------------+---------------------------------+------------------+----------+-----+------+
+|Its Alright               |Deni Hines      |Delicious                        |2002              |44        |dz3  |30    |
+|Metal Guru                |T. Rex          |The Slider                       |1972-07-21        |50        |dz3  |31    |
+|Heaven Is A Place On Earth|Belinda Carlisle|Greatest Vol.1 - Belinda Carlisle|1987              |74        |dz3  |32    |
+|Paper In Fire             |John Mellencamp |The Lonesome Jubilee (Remastered)|1987              |0         |dz3  |33    |
+|Wrecking Ball             |Miley Cyrus     |Wrecking Ball                    |2013-08-25        |0         |dz3  |34    |
++--------------------------+----------------+---------------------------------+------------------+----------+-----+------+
+
+-------------------------------------------
+Batch: 7
+-------------------------------------------
++------------------------------------------------------+---------------------+---------------------------------+------------------+----------+-----+------+
+|Track Name                                            |Artist Name(s)       |Album Name                       |Album Release Date|Popularity|topic|offset|
++------------------------------------------------------+---------------------+---------------------------------+------------------+----------+-----+------+
+|Deep End                                              |Birdy                |Beautiful Lies (Deluxe)          |2016-03-25        |35        |dz3  |35    |
+|Stay The Night - Featuring Hayley Williams Of Paramore|Zedd, Hayley Williams|Clarity (Deluxe)                 |2014-01-01        |67        |dz3  |36    |
+|Californication                                       |Red Hot Chili Peppers|Californication                  |1999-06-08        |63        |dz3  |37    |
+|We Will Rock You - Remastered 2011                    |Queen                |News Of The World (2011 Remaster)|1977-10-28        |82        |dz3  |38    |
+|My Island Home                                        |Warumpi Band         |Go Bush!                         |1987-04-03        |47        |dz3  |39    |
++------------------------------------------------------+---------------------+---------------------------------+------------------+----------+-----+------+
+
+out = c.stop()
+>>> 
+
+# так мы проверили то, что чекпоинты работают. Посмотрим на созданную checkpoint directory в HDFS:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# hdfs dfs -ls /mysha/lesson3/spotify_checkpoint/
+Found 4 items
+drwxr-xr-x   - root supergroup          0 2023-08-08 00:41 /mysha/lesson3/spotify_checkpoint/commits
+-rw-r--r--   1 root supergroup         45 2023-08-08 00:36 /mysha/lesson3/spotify_checkpoint/metadata
+drwxr-xr-x   - root supergroup          0 2023-08-08 00:41 /mysha/lesson3/spotify_checkpoint/offsets
+drwxr-xr-x   - root supergroup          0 2023-08-08 00:36 /mysha/lesson3/spotify_checkpoint/sources
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# hdfs dfs -ls /mysha/lesson3/spotify_checkpoint/offsets/
+Found 8 items
+-rw-r--r--   1 root supergroup        656 2023-08-08 00:36 /mysha/lesson3/spotify_checkpoint/offsets/0
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:36 /mysha/lesson3/spotify_checkpoint/offsets/1
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:37 /mysha/lesson3/spotify_checkpoint/offsets/2
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:37 /mysha/lesson3/spotify_checkpoint/offsets/3
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:37 /mysha/lesson3/spotify_checkpoint/offsets/4
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:40 /mysha/lesson3/spotify_checkpoint/offsets/5
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:40 /mysha/lesson3/spotify_checkpoint/offsets/6
+-rw-r--r--   1 root supergroup        657 2023-08-08 00:41 /mysha/lesson3/spotify_checkpoint/offsets/7
+
+# под 8 батчей создалось 8 файлов, содержащих JSON с информацией об оффсетах (смещениях)
+# прочитаем, к примеру, пятый:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains/dz3# hdfs dfs -cat /mysha/lesson3/spotify_checkpoint/offsets/4
+v1
+{"batchWatermarkMs":0,"batchTimestampMs":1691444250023,"conf":{"spark.sql.streaming.stateStore.providerClass":"org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider","spark.sql.streaming.join.stateFormatVersion":"2","spark.sql.streaming.stateStore.compression.codec":"lz4","spark.sql.streaming.stateStore.rocksdb.formatVersion":"5","spark.sql.streaming.statefulOperator.useStrictDistribution":"true","spark.sql.streaming.flatMapGroupsWithState.stateFormatVersion":"2","spark.sql.streaming.multipleWatermarkPolicy":"min","spark.sql.streaming.aggregation.stateFormatVersion":"2","spark.sql.shuffle.partitions":"200"}}
+
+
+
+# Отдельно я погуглил то, что мы получили, и вот как расшифровывается содержание у этого JSON из checkpoint/offsets/:
+# - "v1" - версия формата состояния.
+# - "batchWatermarkMs" - время "watermark" в миллисекундах для пакета данных. Данные, пришедшие после указанной "watermark", считаются протухшими и не влияют на вычисления.
+# - "batchTimestampMs" - метка времени пакета данных в миллисекундах, в которое пакет данных был обработан и сохранен.
+# - "conf" - раздел, содержащий информацию о конфигурации Spark Streaming.
+#   - "spark.sql.streaming.stateStore.providerClass" - класс провайдера хранилища состояний, в данном случае, оно указывает на HDFSBackedStateStoreProvider.
+#   - "spark.sql.streaming.join.stateFormatVersion" - версия формата состояния для операций join.
+#   - "spark.sql.streaming.stateStore.compression.codec" - кодек сжатия используемый для хранения состояния.
+#   - "spark.sql.streaming.stateStore.rocksdb.formatVersion" - версия формата состояния для хранилища состояний RocksDB.
+#   - "spark.sql.streaming.statefulOperator.useStrictDistribution" - определяет, должны ли состояния строго соблюдать распределение операторов, работающих над данными.
+#   - "spark.sql.streaming.flatMapGroupsWithState.stateFormatVersion" - версия формата состояния для операций flatMapGroupsWithState.
+#   - "spark.sql.streaming.multipleWatermarkPolicy" - политика обработки нескольких "watermark" в случае соединения нескольких потоков данных.
+#   - "spark.sql.streaming.aggregation.stateFormatVersion" - версия формата состояния для операций агрегации.
+#   - "spark.sql.shuffle.partitions" - количество разделов при перераспределении данных в Spark SQL.
+
