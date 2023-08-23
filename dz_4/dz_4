@@ -1,0 +1,466 @@
+Рассматриваем получателей (Sinks for Spark Structured Streaming): Menory, File, Kafka и Foreach Batch
+
+Датасет взял отсюда: https://www.kaggle.com/datasets/juanmerinobermejo/laptops-price-dataset
+
+Это датасет с информацией о ноутбуках, их характеристиках и ценах с испанского сайта PC componentes, собранный с помощью Power Automate.
+В датасете я оставил такие столбцы:
+- Laptop: уникальный идентификатор или название модели ноутбука
+- Brand: бренд
+- Model: модель
+- Screen: диагональ экрана
+- Final Price: цена в евро
+всего 5 полей и 2166 строк
+----------------------------------------------
+для работы использовал 2 терминала, поэтому:
+# - это мой комментарий
+root@mysha-Inspiron-11-3147:/home/hsk# - это один терминал
+>>> - это второй терминал (Spark-сессия)
+----------------------------------------------
+
+
+# для начала переведём имеющийся датасет из csv в JSON при помощи самописной функции get_json. Посмотрим на неё:
+
+root@mysha-Inspiron-11-3147:/home/hsk# cat /home/GeekBrains/csv_to_json.py 
+#!/usr/bin/python3
+
+import json
+import csv
+import os
+import sys
+
+def get_json(csv_file_path):
+    csvfile = open(csv_file_path, 'r')
+    csv_dir, csv_filename = os.path.split(csv_file_path)
+    jsonfile_path = os.path.join(csv_dir, csv_filename.replace('.csv', '.json'))
+    jsonfile = open(jsonfile_path, 'w')
+
+    reader = csv.reader(csvfile)
+    header = next(reader)
+    for row in reader:
+        json_data = {}
+        for i in range(len(header)):
+            try:
+                value = int(row[i].strip())
+            except ValueError:
+                try:
+                    value = float(row[i].strip())
+                except ValueError:
+                    value = row[i].strip()
+            json_data[header[i].strip()] = value
+        json.dump(json_data, jsonfile)
+        jsonfile.write('\n')
+    
+    csvfile.close()
+    jsonfile.close()
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('Должно быть два аргумента: python3 csv_to_json.py <csv_file_path>')
+        sys.exit(1)
+    if len(sys.argv) > 2:
+        print('Используются первые два аргумента, остальные игнорируются')
+    
+    csv_file_path = sys.argv[1]
+    get_json(csv_file_path)
+    
+# разница от предудыщей версии (из 3-го домашнего задания) в том, что эта функция определяет тип данных
+# int и float, а не делает все значения типом str, как был ранее => сериализуем датасет.
+# было:
+
+root@mysha-Inspiron-11-3147:/home/hsk# head -3 /home/GeekBrains/laptops.csv 
+Laptop,Brand,Model,Screen,Final Price
+"ASUS ExpertBook B1 B1502CBA-EJ0436X Intel Core i5-1235U/8GB/512GB SSD/15.6""",Asus,ExpertBook,15.6,1009
+"Alurin Go Start Intel Celeron N4020/8GB/256GB SSD/15.6""",Alurin,Go,15.6,299
+
+# стало:
+
+root@mysha-Inspiron-11-3147:/home/hsk# python3 /home/GeekBrains/csv_to_json.py /home/GeekBrains/laptops.csv 
+root@mysha-Inspiron-11-3147:/home/hsk# head -2 /home/GeekBrains/laptops.json 
+{"Laptop": "ASUS ExpertBook B1 B1502CBA-EJ0436X Intel Core i5-1235U/8GB/512GB SSD/15.6\"", "Brand": "Asus", "Model": "ExpertBook", "Screen": 15.6, "Final Price": 1009}
+{"Laptop": "Alurin Go Start Intel Celeron N4020/8GB/256GB SSD/15.6\"", "Brand": "Alurin", "Model": "Go", "Screen": 15.6, "Final Price": 299}
+
+# создадим топик, забросим в него получившийся JSON-файл и выведем 2 первые строчки:
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-topics.sh --create --topic dz4First --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+Created topic dz4First.
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-producer.sh --topic dz4First --bootstrap-server localhost:9092 < /home/GeekBrains/laptops.json 
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-consumer.sh --topic dz4First --bootstrap-server localhost:9092 --from-beginning --max-messages 2
+{"Laptop": "ASUS ExpertBook B1 B1502CBA-EJ0436X Intel Core i5-1235U/8GB/512GB SSD/15.6\"", "Brand": "Asus", "Model": "ExpertBook", "Screen": 15.6, "Final Price": 1009}
+{"Laptop": "Alurin Go Start Intel Celeron N4020/8GB/256GB SSD/15.6\"", "Brand": "Alurin", "Model": "Go", "Screen": 15.6, "Final Price": 299}
+Processed a total of 2 messages
+
+# топик готов. Запускаем Spark-сессию с Kafka:
+
+root@mysha-Inspiron-11-3147:/home/hsk# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/08/09 19:45:52 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/08/09 19:45:52 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+:: resolving dependencies :: org.apache.spark#spark-submit-parent-624670a9-0ff6-4438-8346-c4c8329bb5e2;1.0
+        confs: [default]
+        found org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.hadoop#hadoop-client-runtime;3.3.2 in central
+        found org.spark-project.spark#unused;1.0.0 in central
+        found org.apache.hadoop#hadoop-client-api;3.3.2 in central
+        found org.xerial.snappy#snappy-java;1.1.8.4 in central
+        found org.slf4j#slf4j-api;1.7.32 in central
+        found commons-logging#commons-logging;1.1.3 in central
+        found com.google.code.findbugs#jsr305;3.0.0 in central
+        found org.apache.commons#commons-pool2;2.11.1 in central
+        found org.apache.kafka#kafka-clients;3.3.1 in central
+        found com.github.luben#zstd-jni;1.5.2-1 in central
+        found org.lz4#lz4-java;1.8.0 in central
+        found org.slf4j#slf4j-api;1.7.36 in central
+:: resolution report :: resolve 2197ms :: artifacts dl 86ms
+        :: modules in use:
+        com.github.luben#zstd-jni;1.5.2-1 from central in [default]
+        com.google.code.findbugs#jsr305;3.0.0 from central in [default]
+        commons-logging#commons-logging;1.1.3 from central in [default]
+        org.apache.commons#commons-pool2;2.11.1 from central in [default]
+        org.apache.hadoop#hadoop-client-api;3.3.2 from central in [default]
+        org.apache.hadoop#hadoop-client-runtime;3.3.2 from central in [default]
+        org.apache.kafka#kafka-clients;3.3.1 from central in [default]
+        org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.lz4#lz4-java;1.8.0 from central in [default]
+        org.slf4j#slf4j-api;1.7.36 from central in [default]
+        org.spark-project.spark#unused;1.0.0 from central in [default]
+        org.xerial.snappy#snappy-java;1.1.8.4 from central in [default]
+        :: evicted modules:
+        org.apache.kafka#kafka-clients;2.8.1 by [org.apache.kafka#kafka-clients;3.3.1] in [default]
+        org.slf4j#slf4j-api;1.7.32 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   15  |   0   |   0   |   2   ||   13  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-624670a9-0ff6-4438-8346-c4c8329bb5e2
+        confs: [default]
+        0 artifacts copied, 13 already retrieved (0kB/38ms)
+23/08/09 19:45:57 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1691599564783).
+SparkSession available as 'spark'.
+>>> 
+
+# импортируем необходимые для работы библиотеки и создадим потоковый DataFrame с подпиской на топик dz4First,
+# зададим maxOffsetsPerTrigger = 5 для формирования микро-батчей из 5-ти оффсетов 
+# и startingOffsets=earliest для счения с первого сообщения:
+
+>>> from pyspark.sql import functions as F
+>>> from pyspark.sql.types import StructType, StructField, StringType, FloatType, IntegerType
+>>> kafka_brokers = "localhost:9092"
+>>> raw_data = spark.readStream.format("kafka") \
+...     .option("kafka.bootstrap.servers", kafka_brokers) \
+...     .option("subscribe", "dz4First") \
+...     .option("startingOffsets", "earliest") \
+...     .option("maxOffsetsPerTrigger", "5") \
+...     .load()
+>>> 
+
+# создадим схему руками и по ней плоский DataFrame, сразу посмотрим на то, с чем дело иметь будем:
+
+>>> my_schema = StructType([
+...     StructField("Laptop", StringType()),
+...     StructField("Brand", StringType()),
+...     StructField("Model", StringType()),
+...     StructField("Screen", FloatType()),
+...     StructField("Final Price", IntegerType())
+... ])
+>>> parsed_laptops = raw_data \
+...     .select(F.from_json(F.col("value").cast("String"), my_schema).alias("value"), "offset") \
+...     .select("offset", "value.*")
+>>> parsed_laptops.printSchema()
+root
+ |-- offset: long (nullable = true)
+ |-- Laptop: string (nullable = true)
+ |-- Brand: string (nullable = true)
+ |-- Model: string (nullable = true)
+ |-- Screen: float (nullable = true)
+ |-- Final Price: integer (nullable = true)
+ 
+ 
+ 
+# самое время опробовать разных Sink - получателей потока.
+# начнём с Menory Sink и прочитаем данные во временную таблицу. До остановки стрима несколько раз посчитаем
+# количество строк в таблице, чтоб убедиться в том, что стрим запущен и всё с ним в порядке: 
+
+>>> def memory_sink(df, freq):
+...     return  df.writeStream \
+...         .format("memory") \
+...         .queryName("temp_table") \
+...         .trigger(processingTime=f"{freq} seconds") \
+...         .start()
+... 
+>>> st = memory_sink(parsed_laptops, 15)
+23/08/09 20:30:00 WARN ResolveWriteToStream: Temporary checkpoint location created which is deleted normally when the query didn't fail: /tmp/temporary-108093ac-c1c7-4d3a-a181-f083236b7a17. If it's required to delete it under any circumstances, please set spark.sql.streaming.forceDeleteTempCheckpointLocation to true. Important to know deleting temp checkpoint folder is best effort.
+23/08/09 20:30:03 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+>>> spark.sql("SELECT * FROM temp_table").count()
+20
+>>> spark.sql("SELECT * FROM temp_table").count()
+30
+>>> spark.sql("SELECT * FROM temp_table").count()
+35
+>>> st.stop()
+>>> 
+
+# посмотрим на то, что сохранилось в таблицу, выведем первые 5 строк:
+
+>>> spark.sql("SELECT * FROM temp_table LIMIT 5").show()
++------+--------------------+------+----------+------+-----------+
+|offset|              Laptop| Brand|     Model|Screen|Final Price|
++------+--------------------+------+----------+------+-----------+
+|     0|ASUS ExpertBook B...|  Asus|ExpertBook|  15.6|       1009|
+|     1|Alurin Go Start I...|Alurin|        Go|  15.6|        299|
+|     2|ASUS ExpertBook B...|  Asus|ExpertBook|  15.6|        789|
+|     3|MSI Katana GF66 1...|   MSI|    Katana|  15.6|       1199|
+|     4|HP 15S-FQ5085NS I...|    HP|       15S|  15.6|        669|
++------+--------------------+------+----------+------+-----------+
+
+# а вот все HP, что успели записаться, с сортировкой цены по убыванию:
+
+>>> spark.sql("SELECT * FROM temp_table WHERE Brand LIKE '%HP%' ORDER BY `Final Price` DESC").show()
++------+--------------------+-----+--------+------+-----------+
+|offset|              Laptop|Brand|   Model|Screen|Final Price|
++------+--------------------+-----+--------+------+-----------+
+|     9|HP Victus 16-d103...|   HP|  Victus|  16.1|       1149|
+|    27|HP Victus 15-fa00...|   HP|  Victus|  15.6|        999|
+|    28|HP Pavilion 15-eh...|   HP|Pavilion|  15.6|        799|
+|    30|HP 15S-FQ5028NS I...|   HP|     15S|  15.6|        789|
+|    15|HP 15S-FQ5013NS I...|   HP|     15S|  15.6|        699|
+|     4|HP 15S-FQ5085NS I...|   HP|     15S|  15.6|        669|
+|    17|HP 15S-FQ2163NS I...|   HP|     15S|  15.6|        549|
+|    33|HP 15S-fq2159ns I...|   HP|     15S|  15.6|        539|
++------+--------------------+-----+--------+------+-----------+
+
+
+
+# попробуем теперь получателя File Sink с сохранением данных в фармате .parquet, дополнительно укажем
+# checkpoint directory в HDFS, а папку на HDFS для него заранее создадим и будем на неё ссылаться:
+
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -mkdir /mysha/dz4
+
+# а ещё добавим в DataFrame поле "current_time" в указанием времени записи строки в таблицу:
+
+>>> def file_sink(df, freq):
+...     return  df.writeStream \
+...         .format("parquet") \
+...         .trigger(processingTime=f"{freq} seconds") \
+...         .option("path", "/mysha/dz4/parquet_sink") \
+...         .option("checkpointLocation", "/mysha/dz4/checkpoint") \
+...         .start()
+... 
+>>> time_parsed_laptops = parsed_laptops.withColumn(
+...     "current_time", F.current_timestamp()
+... )
+>>> st = file_sink(time_parsed_laptops, 10)
+23/08/09 20:53:35 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+
+# пока стрим идёт, проверим и убедимся в том, что директории для паркета и чекпоинтов созданы:
+
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -ls /mysha/dz4
+Found 2 items
+drwxr-xr-x   - root supergroup          0 2023-08-09 20:53 /mysha/dz4/checkpoint
+drwxr-xr-x   - root supergroup          0 2023-08-09 20:54 /mysha/dz4/parquet_sink
+
+# остановим стрим и посмотрим на то, что записалось, отсортировав вывод по оффсетам,
+# т.к. .parquet сохраняется партициями и при запросе вывода информации таблица начинает 
+# формироваться с ближайшей партиции, а это не гарантирует сохранение порядка строк
+
+st.stop()                                                                                                                 
+>>> df = spark.read.format("parquet") \
+...     .load("/mysha/dz4/parquet_sink")
+>>> df.orderBy("offset").show(15, truncate=30)
++------+------------------------------+------+----------+------+-----------+-----------------------+                      
+|offset|                        Laptop| Brand|     Model|Screen|Final Price|           current_time|
++------+------------------------------+------+----------+------+-----------+-----------------------+
+|     0|ASUS ExpertBook B1 B1502CBA...|  Asus|ExpertBook|  15.6|       1009|2023-08-09 20:53:37.001|
+|     1|Alurin Go Start Intel Celer...|Alurin|        Go|  15.6|        299|2023-08-09 20:53:37.001|
+|     2|ASUS ExpertBook B1 B1502CBA...|  Asus|ExpertBook|  15.6|        789|2023-08-09 20:53:37.001|
+|     3|MSI Katana GF66 12UC-082XES...|   MSI|    Katana|  15.6|       1199|2023-08-09 20:53:37.001|
+|     4|HP 15S-FQ5085NS Intel Core ...|    HP|       15S|  15.6|        669|2023-08-09 20:53:37.001|
+|     5|MSI Crosshair 17 C12VF-264X...|   MSI| Crosshair|  17.3|       1699|2023-08-09 20:53:42.019|
+|     6|Lenovo Thinkpad E14 Gen 4 A...|Lenovo|  ThinkPad|  14.0|        909|2023-08-09 20:53:42.019|
+|     7|ASUS VivoBook 15 F515JA-EJ2...|  Asus|  VivoBook|  15.6|        809|2023-08-09 20:53:42.019|
+|     8|Medion Akoya E15415 Intel C...|Medion|     Akoya|  15.6|        519|2023-08-09 20:53:42.019|
+|     9|HP Victus 16-d1038ns Intel ...|    HP|    Victus|  16.1|       1149|2023-08-09 20:53:42.019|
+|    10|Lenovo V15 IGL Intel Celero...|Lenovo|       V15|  15.6|        349|2023-08-09 20:53:50.013|
+|    11|MSI Thin GF63 12VE-021XES I...|   MSI|      Thin|  15.6|       1399|2023-08-09 20:53:50.013|
+|    12|ASUS ROG Strix G15 G513RC-H...|  Asus|       ROG|  15.6|       1199|2023-08-09 20:53:50.013|
+|    13|Lenovo V15 G3 ABA AMD Ryzen...|Lenovo|       V15|  15.6|        476|2023-08-09 20:53:50.013|
+|    14|Lenovo IdeaPad 1 15ADA7 AMD...|Lenovo|   IdeaPad|  15.6|        391|2023-08-09 20:53:50.013|
++------+------------------------------+------+----------+------+-----------+-----------------------+
+only showing top 15 rows
+
+# видим, как раз в 5 строк (размер микро-батча) время меняется, значит current_time работает верно
+
+
+
+# следующий получатель - Kafka Sink. Будем сохранять информацию в отдельный топик, создадим его:
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-topics.sh --create --topic dz4Second --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+Created topic dz4Second.
+
+# и пересоздадим checkpoint directory, т.к. одна такая директория не может работать для двух рвзных потоков:
+
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -rm -r -f -skipTrash /mysha/dz4/checkpoint
+Deleted /mysha/dz4/checkpoint
+
+# запустим стрим, остановим стрим. И проверим первые строки нового топика, они должны появиться в JSON-формате:
+
+>>> def kafka_sink_json(df, freq):
+...     return df.selectExpr("CAST(null AS STRING) AS key", "CAST(to_json(struct(*)) AS STRING) AS value") \
+...         .writeStream \
+...         .format("kafka") \
+...         .trigger(processingTime=f"{freq} seconds") \
+...         .option("topic", "dz4Second") \
+...         .option("kafka.bootstrap.servers", kafka_brokers) \
+...         .option("checkpointLocation", "/mysha/dz4/checkpoint") \
+...         .start()
+... 
+>>> st = kafka_sink_json(time_parsed_laptops, 10)
+23/08/09 22:16:14 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+st.stop()  
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-consumer.sh --topic dz4Second --bootstrap-server localhost:9092 --from-beginning --max-messages 5
+{"offset":0,"Laptop":"ASUS ExpertBook B1 B1502CBA-EJ0436X Intel Core i5-1235U/8GB/512GB SSD/15.6\"","Brand":"Asus","Model":"ExpertBook","Screen":15.6,"Final Price":1009,"current_time":"2023-08-09T22:16:15.333+03:00"}
+{"offset":1,"Laptop":"Alurin Go Start Intel Celeron N4020/8GB/256GB SSD/15.6\"","Brand":"Alurin","Model":"Go","Screen":15.6,"Final Price":299,"current_time":"2023-08-09T22:16:15.333+03:00"}
+{"offset":2,"Laptop":"ASUS ExpertBook B1 B1502CBA-EJ0424X Intel Core i3-1215U/8GB/256GB SSD/15.6\"","Brand":"Asus","Model":"ExpertBook","Screen":15.6,"Final Price":789,"current_time":"2023-08-09T22:16:15.333+03:00"}
+{"offset":3,"Laptop":"MSI Katana GF66 12UC-082XES Intel Core i7-12700H/16GB/1TB SSD/RTX3050/15.6\"","Brand":"MSI","Model":"Katana","Screen":15.6,"Final Price":1199,"current_time":"2023-08-09T22:16:15.333+03:00"}
+{"offset":4,"Laptop":"HP 15S-FQ5085NS Intel Core i5-1235U/16GB/512GB SSD/15.6\"","Brand":"HP","Model":"15S","Screen":15.6,"Final Price":669,"current_time":"2023-08-09T22:16:15.333+03:00"}
+Processed a total of 5 messages
+
+
+
+# и последний получатель - Foreach Batch. Для него увеличим размер батча до 15-ти строк и добавим
+# один технический столбец, по которопу будем группироваться:
+
+>>> raw_data = spark.readStream.format("kafka") \
+...     .option("kafka.bootstrap.servers", kafka_brokers) \
+...     .option("subscribe", "dz4First") \
+...     .option("startingOffsets", "earliest") \
+...     .option("maxOffsetsPerTrigger", "15") \
+...     .load()
+>>> parsed_laptops = raw_data \
+...     .select(F.from_json(F.col("value").cast("String"), my_schema).alias("value"), "offset") \
+...     .select("offset", "value.*")
+>>> parsed_laptops = parsed_laptops.withColumn("temp_column", F.lit(1))
+
+# будем выводить в консоль агрегированную информацию по цене в каждом батче - минимальная, максимальная, средняя, сумма:
+
+>>> def foreach_batch_sink(df, freq):
+...     return  df.writeStream \
+...         .foreachBatch(foreach_batch_function) \
+...         .trigger(processingTime=f"{freq} seconds") \
+...         .start()
+... 
+>>> def foreach_batch_function(df, epoch_id):
+...     print(f"\nstarting epoch {str(epoch_id)}\n values for batch:")
+...     df.groupBy("temp_column").agg(
+...         F.count ("Final Price").alias("count"),
+...         F.min("Final Price").alias("min"),
+...         F.max("Final Price").alias("max"),
+...         F.avg("Final Price").alias("mean"),
+...         F.sum("Final Price").alias("sum")
+...     ).select("count", "min", "max", "mean", "sum").show()
+...     print(f"finishing epoch {str(epoch_id)}\n")
+...     print("-----" * 25)
+... 
+>>> st = foreach_batch_sink(parsed_laptops, 15)
+23/08/09 23:27:42 WARN ResolveWriteToStream: Temporary checkpoint location created which is deleted normally when the query didn't fail: /tmp/temporary-d7db0ef2-582b-4ccc-bebc-2c9aabca6385. If it's required to delete it under any circumstances, please set spark.sql.streaming.forceDeleteTempCheckpointLocation to true. Important to know deleting temp checkpoint folder is best effort.
+23/08/09 23:27:42 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+>>> 
+starting epoch 0
+ values for batch:
++-----+---+----+-----+-----+                                                                                              
+|count|min| max| mean|  sum|
++-----+---+----+-----+-----+
+|   15|299|1699|857.6|12864|
++-----+---+----+-----+-----+
+
+finishing epoch 0
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+starting epoch 1
+ values for batch:
++-----+---+----+-----+-----+                                                                                              
+|count|min| max| mean|  sum|
++-----+---+----+-----+-----+
+|   15|239|1249|797.0|11955|
++-----+---+----+-----+-----+
+
+finishing epoch 1
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+starting epoch 2
+ values for batch:
++-----+---+----+------+-----+                                                                                             
+|count|min| max|  mean|  sum|
++-----+---+----+------+-----+
+|   15|399|2249|1039.0|15585|
++-----+---+----+------+-----+
+
+finishing epoch 2
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+starting epoch 3
+ values for batch:
++-----+---+----+-----+-----+                                                                                              
+|count|min| max| mean|  sum|
++-----+---+----+-----+-----+
+|   15|379|1899|959.0|14385|
++-----+---+----+-----+-----+
+
+finishing epoch 3
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+starting epoch 4
+ values for batch:
++-----+---+----+------------------+-----+                                                                                 
+|count|min| max|              mean|  sum|
++-----+---+----+------------------+-----+
+|   15|499|2499|1175.6666666666667|17635|
++-----+---+----+------------------+-----+
+
+finishing epoch 4
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+starting epoch 5
+ values for batch:
++-----+---+----+-----+-----+                                                                                              
+|count|min| max| mean|  sum|
++-----+---+----+-----+-----+
+|   15|499|2449|955.0|14325|
++-----+---+----+-----+-----+
+
+finishing epoch 5
+
+-----------------------------------------------------------------------------------------------------------------------------
+st.stop()
+>>> 
+
+# => всех новых получателей (Sinks) рассмотрели, всё получилось, ура.
+
