@@ -1,0 +1,945 @@
+ЗАДАНИЕ:
+1. Подключиться к кластеру, создать таблицу в бд Cassandra с использованием консоли cqlsh.
+2. Заполнить таблицу данными.
+3. Читаем данные в пакетном режиме через Spark используя коннектор к Cassandra. Подготовить отчет - листинг консоли с результатами выполнения заданий.
+4. Доп задание на оценку "Хорошо": Выполнить все необходимые задания в предыдущих пунктах. Создать временное представление в памяти, выполнить запрос с фильтром НЕ по ключевому полю и добиться пуш фильтра в Cassandra.
+5. Доп задание на оценку "Отлично": Выполнить все необходимые задания в предыдущих пунктах. Пункт 2 выполнить следующим образом: Скачать dataset среднего размера из любого открытого источника, написать скрипт на python для импорта dataset в таблицу Cassandra (в качестве коннектора использовать пакет from cassandra.cluster import Cluster)
+
+РЕШЕНИЕ:
+
+
+# идём в Cassandra и создаём схему, задав ей следующие параметры:
+#     - 'class': 'SimpleStrategy' - данные между нодами будут распределяться рандомно
+#     - 'replication_factor': 1 - без репликаций 
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# cqlsh
+Connected to Test Cluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.3 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+cqlsh> CREATE KEYSPACE IF NOT EXISTS dz_6
+   ...     WITH REPLICATION = {
+   ...     'class': 'SimpleStrategy',
+   ...     'replication_factor': 1
+   ... };
+
+   
+# проверяем в списке, появилась ли наша схема, и переходим в неё:
+
+
+cqlsh> DESCRIBE KEYSPACES;
+
+dz_6      system       system_distributed  system_traces  system_virtual_schema
+lesson_6  system_auth  system_schema       system_views 
+
+cqlsh> USE dz_6;
+cqlsh:dz_6> 
+
+
+# создадим небольшую таблицу персонажей из вселенной Гарри Поттера, id сделаем auto_increment:
+
+
+cqlsh:dz_6> CREATE TABLE IF NOT EXISTS Universe_of_Harry_Potter (
+        ...     id int,
+        ...     firstname text,
+        ...     lastname text,
+        ...     year_of_birth int,
+        ...     age int,
+        ...     school text,
+        ...     houses text,
+        ...     primary key (id)
+        ... );
+        
+        
+# таблица готова, но она пока пустая:
+
+
+cqlsh:dz_6> SELECT * FROM Universe_of_Harry_Potter;
+
+ id | age | firstname | houses | lastname | school | year_of_birth
+----+-----+-----------+--------+----------+--------+---------------
+
+(0 rows)
+
+
+# заполним несколько строк:
+
+
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (0, 'Harry', 'Potter', 1980, 43, 'Hogwarts', 'Gryffindor');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (1, 'Ron', 'Weasley', 1980, 43, 'Hogwarts', 'Gryffindor'); 
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (2, 'Hermione', 'Granger', 1979, 43, 'Hogwarts', 'Gryffindor');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (3, 'Draco', 'Malfoy', 1980, 43, 'Hogwarts', 'Slytherin');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses)
+        ...    VALUES (4, 'Bellatrix', 'Lestrange', 1951, 47, 'Hogwarts', 'Slytherin');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (5, 'Albus Severus', 'Potter', 2006, 17, 'Hogwarts', 'Slytherin');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (6, 'Severus', 'Snape', 1960, 37, 'Hogwarts', 'Slytherin');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (7, 'Albus Percival Wulfric Brian', 'Dumbledore', 1881, 115, 'Hogwarts', 'Gryffindor'); 
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (8, 'Tom Marvolo', 'Riddle', 1926, 71, 'Hogwarts', 'Slytherin'); 
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...    VALUES (9, 'Cedric', 'Diggory', 1977, 17, 'Hogwarts', 'Hufflepuff');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school, houses)
+        ...    VALUES (10, 'Luna', 'Lovegood', 1981, 42, 'Hogwarts', 'Ravenclaw'); 
+
+      
+# посмотрим тепепрь на таблицу:
+
+
+cqlsh:dz_6> SELECT * FROM dz_6.universe_of_harry_potter;
+
+ id | age | firstname                    | houses     | lastname   | school   | year_of_birth
+----+-----+------------------------------+------------+------------+----------+---------------
+  5 |  17 |                Albus Severus |  Slytherin |     Potter | Hogwarts |          2006
+ 10 |  42 |                         Luna |  Ravenclaw |   Lovegood | Hogwarts |          1981
+  1 |  43 |                          Ron | Gryffindor |    Weasley | Hogwarts |          1980
+  8 |  71 |                  Tom Marvolo |  Slytherin |     Riddle | Hogwarts |          1926
+  0 |  43 |                        Harry | Gryffindor |     Potter | Hogwarts |          1980
+  2 |  43 |                     Hermione | Gryffindor |    Granger | Hogwarts |          1979
+  4 |  47 |                    Bellatrix |  Slytherin |  Lestrange | Hogwarts |          1951
+  7 | 115 | Albus Percival Wulfric Brian | Gryffindor | Dumbledore | Hogwarts |          1881
+  6 |  37 |                      Severus |  Slytherin |      Snape | Hogwarts |          1960
+  9 |  17 |                       Cedric | Hufflepuff |    Diggory | Hogwarts |          1977
+  3 |  43 |                        Draco |  Slytherin |     Malfoy | Hogwarts |          1980
+
+(11 rows)
+
+
+#  видим - и строки и колонки перемешались, т.к. Cassandra не поддерживает порядок строк и колонок, она не про это.
+#  добавим персонажа в таблицу из других школ, в которых нет факультетов. И попробуем не передавать id:
+
+
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (firstname, lastname, year_of_birth, age, school) 
+        ...     VALUES ('Viktor', 'Krum', 1976, 47, 'Durmstrang');
+InvalidRequest: Error from server: code=2200 [Invalid query] message="Some partition key parts are missing: id"
+
+
+# получили ошибку! Но не из-за того, что факультет не передали, а из-за того, что без id никак нельзя. Вот схема таблицы:
+
+
+cqlsh> DESCRIBE TABLE dz_6.universe_of_harry_potter;
+
+CREATE TABLE dz_6.universe_of_harry_potter (
+    id int PRIMARY KEY,
+    age int,
+    firstname text,
+    houses text,
+    lastname text,
+    school text,
+    year_of_birth int
+) WITH additional_write_policy = '99p'
+    AND bloom_filter_fp_chance = 0.01
+    AND caching = {'keys': 'ALL', 'rows_per_partition': 'NONE'}
+    AND cdc = false
+    AND comment = ''
+    AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy', 'max_threshold': '32', 'min_threshold': '4'}
+    AND compression = {'chunk_length_in_kb': '16', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND memtable = 'default'
+    AND crc_check_chance = 1.0
+    AND default_time_to_live = 0
+    AND extensions = {}
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair = 'BLOCKING'
+    AND speculative_retry = '99p';
+cqlsh:dz_6> 
+
+
+# мы получили описание таблицы на языке CQL (Cassandra Query Language). Погуглил, вот что оно значит:
+#   - id int PRIMARY KEY - столбец id у нас первичный ключ, поэтому без него никак нельзя
+#   - дальше идёт описание остальных столбцов ровно такое, какое мы и задали при создании таблицы
+#     -- WITH additional_write_policy = '99p' - политика записи данных (Cassandra будет жать подтверждения записи от 99% узлов в кластере перед тем, как считать операцию записи успешной) 
+#     -- AND bloom_filter_fp_chance = 0.01 - задает вероятность ложного срабатывания фильтра Блума.
+#     -- AND caching = {'keys': 'ALL', 'rows_per_partition': 'NONE'} - задает параметры кэширования.
+#     -- AND cdc = false - функция Change Data Capture (CDC) отключена для таблицы.
+#     -- AND comment = '' - комментарий к таблице.
+#     -- AND compaction = {...} - определяет параметры компакции данных в таблице.
+#     -- AND compression = {...} - задает параметры сжатия данных в таблице.
+#     -- AND memtable = 'default' - определяет параметры Memtable для таблицы.
+#     -- AND crc_check_chance = 1.0 - задает шанс проверки контрольной суммы CRC.
+#     -- AND default_time_to_live = 0 - время жизни данных по умолчанию для таблицы.
+#     -- AND extensions = {} - расширения для таблицы.
+#     -- AND gc_grace_seconds = 864000 - период ожидания сборки мусора в секундах для таблицы.
+#     -- AND max_index_interval = 2048 - максимальный интервал индекса для таблицы.
+#     -- AND memtable_flush_period_in_ms = 0 - периодичность сброса Memtable в миллисекундах для таблицы.
+#     -- AND min_index_interval = 128 - минимальный интервал индекса для таблицы.
+#     -- AND read_repair = 'BLOCKING' - указывает стратегию ремонта чтения для таблицы.
+#     -- AND speculative_retry = '99p' - стратегия спекулятивной повторной попытки для таблицы (99%).
+
+
+# исправим наш запрос, передай и id и посмотрим на результат, на этот раз расставив столбцы так, как нам надо:
+
+
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school) 
+        ...     VALUES (11, 'Viktor', 'Krum', 1976, 47, 'Durmstrang');
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school)
+        ...     VALUES (12, 'Gellert', 'Grindelwald', 1882, 114, 'Durmstrang'); 
+cqlsh:dz_6> INSERT INTO Universe_of_Harry_Potter (id, firstname, lastname, year_of_birth, age, school) 
+        ...     VALUES (5, 'Fleur', 'Delacour', 1977, 45, 'Beauxbatons');
+
+cqlsh:dz_6> SELECT id, firstname, lastname, year_of_birth, age, school, houses FROM dz_6.universe_of_harry_potter ;
+
+ id | firstname                    | lastname    | year_of_birth | age | school      | houses
+----+------------------------------+-------------+---------------+-----+-------------+------------
+  5 |                        Fleur |    Delacour |          1977 |  45 | Beauxbatons |  Slytherin
+ 10 |                         Luna |    Lovegood |          1981 |  42 |    Hogwarts |  Ravenclaw
+ 11 |                       Viktor |        Krum |          1976 |  47 |  Durmstrang |       null
+  1 |                          Ron |     Weasley |          1980 |  43 |    Hogwarts | Gryffindor
+  8 |                  Tom Marvolo |      Riddle |          1926 |  71 |    Hogwarts |  Slytherin
+  0 |                        Harry |      Potter |          1980 |  43 |    Hogwarts | Gryffindor
+  2 |                     Hermione |     Granger |          1979 |  43 |    Hogwarts | Gryffindor
+  4 |                    Bellatrix |   Lestrange |          1951 |  47 |    Hogwarts |  Slytherin
+  7 | Albus Percival Wulfric Brian |  Dumbledore |          1881 | 115 |    Hogwarts | Gryffindor
+  6 |                      Severus |       Snape |          1960 |  37 |    Hogwarts |  Slytherin
+  9 |                       Cedric |     Diggory |          1977 |  17 |    Hogwarts | Hufflepuff
+ 12 |                      Gellert | Grindelwald |          1882 | 114 |  Durmstrang |       null
+  3 |                        Draco |      Malfoy |          1980 |  43 |    Hogwarts |  Slytherin
+
+(13 rows)
+
+
+# и вот какой новый прикол мы видим: строки записались, но т.к. для Флёр Делакур мы передали id=5, то она затёрла Альбуса Поттера
+# при этом факультета у Флёр не было, так как она училась в Шамбартоне, но у неё стоит Слизерин - это шмат информации, оставшийся от сына Гарри Поттера))
+# то есть указав один и тот же id мы трансформировали имеющуюся запись в таблице, а не пересаписали её. Исправим строчку Флёр и вернём Альбуса:
+
+
+cqlsh:dz_6> INSERT INTO universe_of_harry_potter (id, houses) VALUES (5, null);
+cqlsh:dz_6> INSERT INTO universe_of_harry_potter (id, firstname, lastname, year_of_birth, age, school, houses) 
+        ...     VALUES (13, 'Albus Severus', 'Potter', 2006, 17, 'Hogwarts', 'Slytherin');
+cqlsh:dz_6> INSERT INTO universe_of_harry_potter (firstname, lastname, year_of_birth, school, houses, id) 
+        ...     VALUES ('Porpentina', 'Goldstein', 1901, 'Ilvermorny', 'Thunderbird', 100);
+cqlsh:dz_6> INSERT INTO universe_of_harry_potter (firstname, lastname, year_of_birth, school, houses, id) 
+        ...     VALUES ('Queenie', 'Goldstein', 1903, 'Ilvermorny', 'Pukwudgie', 14);
+
+cqlsh:dz_6> SELECT id, firstname, lastname, year_of_birth, age, school, houses FROM dz_6.universe_of_harry_potter ;
+
+ id  | firstname                    | lastname    | year_of_birth | age  | school      | houses
+-----+------------------------------+-------------+---------------+------+-------------+-------------
+   5 |                        Fleur |    Delacour |          1977 |   45 | Beauxbatons |        null
+  10 |                         Luna |    Lovegood |          1981 |   42 |    Hogwarts |   Ravenclaw
+  13 |                Albus Severus |      Potter |          2006 |   17 |    Hogwarts |   Slytherin
+  11 |                       Viktor |        Krum |          1976 |   47 |  Durmstrang |        null
+   1 |                          Ron |     Weasley |          1980 |   43 |    Hogwarts |  Gryffindor
+   8 |                  Tom Marvolo |      Riddle |          1926 |   71 |    Hogwarts |   Slytherin
+   0 |                        Harry |      Potter |          1980 |   43 |    Hogwarts |  Gryffindor
+   2 |                     Hermione |     Granger |          1979 |   43 |    Hogwarts |  Gryffindor
+   4 |                    Bellatrix |   Lestrange |          1951 |   47 |    Hogwarts |   Slytherin
+   7 | Albus Percival Wulfric Brian |  Dumbledore |          1881 |  115 |    Hogwarts |  Gryffindor
+ 100 |                   Porpentina |   Goldstein |          1901 | null |  Ilvermorny | Thunderbird
+   6 |                      Severus |       Snape |          1960 |   37 |    Hogwarts |   Slytherin
+   9 |                       Cedric |     Diggory |          1977 |   17 |    Hogwarts |  Hufflepuff
+  14 |                      Queenie |   Goldstein |          1903 | null |  Ilvermorny |   Pukwudgie
+  12 |                      Gellert | Grindelwald |          1882 |  114 |  Durmstrang |        null
+   3 |                        Draco |      Malfoy |          1980 |   43 |    Hogwarts |   Slytherin
+
+(16 rows)
+
+
+# вот что видно:
+# - название таблиц в Cassandra не чувствительно к регистру. В этом можно убедиться, посмотрев на название таблицы в системной схеме system_schema:
+
+
+cqlsh:dz_6> SELECT keyspace_name, table_name FROM system_schema.tables WHERE keyspace_name = 'dz_6';
+
+ keyspace_name | table_name
+---------------+--------------------------
+          dz_6 | universe_of_harry_potter
+
+(1 rows)
+
+ 
+# - значения для заполнения можно передавать в любом порядке
+# - значение id можно задать руками, как мы сделали для Тины Голдштейн. А её сестре id сделали в порядке, как ни в чём не бывало, и Cassandra от этого не упала
+# - в тех строках, в которых мы какие-то значение не передавали, встал null, а сами строки отображаются в общем выводе как ни в чём не бывало
+
+# в целом, видим, что SQL-подобный синтаксис в Cassandra работает. Но на самом деле это язык CQL (Contextual Query Language) и у него свои приколы
+# CQL в Cassandra не рассчитан на разные фильтры и группировки. Основная цель Cassandra - быстро прочитать и записать информацию. поэтому простые
+# односоставные SELECT-фильтрации (без всяких AND и OR) с цифрами отработают, а с текстом сработает только = и только с добавлением ALLOW FILTERING
+# что само по мебе предупреждает о том, что такая операция нежелательна, не гарантирует точность и при больших объёмах данных может всё уронить
+
+# Для наглядности отфильтруем нашу таблицу, оставив в ней только учеников Хогвартса:
+
+
+cqlsh:dz_6> SELECT id, firstname, lastname, school, houses FROM dz_6.universe_of_harry_potter WHERE school = 'Hogwarts' ALLOW FILTERING;
+
+ id | firstname                    | lastname   | school   | houses
+----+------------------------------+------------+----------+------------
+ 10 |                         Luna |   Lovegood | Hogwarts |  Ravenclaw
+ 13 |                Albus Severus |     Potter | Hogwarts |  Slytherin
+  1 |                          Ron |    Weasley | Hogwarts | Gryffindor
+  8 |                  Tom Marvolo |     Riddle | Hogwarts |  Slytherin
+  0 |                        Harry |     Potter | Hogwarts | Gryffindor
+  2 |                     Hermione |    Granger | Hogwarts | Gryffindor
+  4 |                    Bellatrix |  Lestrange | Hogwarts |  Slytherin
+  7 | Albus Percival Wulfric Brian | Dumbledore | Hogwarts | Gryffindor
+  6 |                      Severus |      Snape | Hogwarts |  Slytherin
+  9 |                       Cedric |    Diggory | Hogwarts | Hufflepuff
+  3 |                        Draco |     Malfoy | Hogwarts |  Slytherin
+
+(11 rows)
+
+
+# а вот народ старше 50-ти лет (были бы и другие, но некоторые не дожили, увы):
+
+
+cqlsh:dz_6> SELECT id, firstname, lastname, age FROM dz_6.universe_of_harry_potter WHERE age > 50 ALLOW FILTERING ;
+
+ id | firstname                    | lastname    | age
+----+------------------------------+-------------+-----
+  8 |                  Tom Marvolo |      Riddle |  71
+  7 | Albus Percival Wulfric Brian |  Dumbledore | 115
+ 12 |                      Gellert | Grindelwald | 114
+
+(3 rows)
+
+
+____________________________________________________________________________________________________________________________________________
+
+# с Cassandra наигрались, схему и таблицу создали, попробуем эту инфу теперь достать из Spark 
+# для этого откроем Spark-сессию с дополнительным актуальным коннектором для Cassandra
+# коннектор такой: com.datastax.spark:spark-cassandra-connector_2.12:3.4.0 - для версии Scala от 2.12 и версии Cassandra от 3.4
+# подключаемся:
+
+root@mysha-Inspiron-11-3147:/home/hsk# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/08/14 05:46:41 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/08/14 05:46:41 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+com.datastax.spark#spark-cassandra-connector_2.12 added as a dependency
+:: resolving dependencies :: org.apache.spark#spark-submit-parent-34999dfe-c96c-4857-bd80-c5e571bb78af;1.0
+        confs: [default]
+        found org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 in central
+        found org.apache.hadoop#hadoop-client-runtime;3.3.2 in central
+        found org.spark-project.spark#unused;1.0.0 in central
+        found org.apache.hadoop#hadoop-client-api;3.3.2 in central
+        found org.xerial.snappy#snappy-java;1.1.8.4 in central
+        found org.slf4j#slf4j-api;1.7.32 in central
+        found commons-logging#commons-logging;1.1.3 in central
+        found com.google.code.findbugs#jsr305;3.0.0 in central
+        found org.apache.commons#commons-pool2;2.11.1 in central
+        found org.apache.kafka#kafka-clients;3.3.1 in central
+        found com.github.luben#zstd-jni;1.5.2-1 in central
+        found org.lz4#lz4-java;1.8.0 in central
+        found org.slf4j#slf4j-api;1.7.36 in central
+        found com.datastax.spark#spark-cassandra-connector_2.12;3.4.0 in central
+        found com.datastax.spark#spark-cassandra-connector-driver_2.12;3.4.0 in central
+        found com.datastax.oss#java-driver-core-shaded;4.13.0 in central
+        found com.datastax.oss#native-protocol;1.5.0 in central
+        found com.datastax.oss#java-driver-shaded-guava;25.1-jre-graal-sub-1 in central
+        found com.typesafe#config;1.4.1 in central
+        found io.dropwizard.metrics#metrics-core;4.1.18 in central
+        found org.hdrhistogram#HdrHistogram;2.1.12 in central
+        found org.reactivestreams#reactive-streams;1.0.3 in central
+        found com.github.stephenc.jcip#jcip-annotations;1.0-1 in central
+        found com.github.spotbugs#spotbugs-annotations;3.1.12 in central
+        found com.google.code.findbugs#jsr305;3.0.2 in central
+        found com.datastax.oss#java-driver-mapper-runtime;4.13.0 in central
+        found com.datastax.oss#java-driver-query-builder;4.13.0 in central
+        found org.apache.commons#commons-lang3;3.10 in central
+        found com.thoughtworks.paranamer#paranamer;2.8 in central
+        found org.scala-lang#scala-reflect;2.12.11 in central
+:: resolution report :: resolve 3605ms :: artifacts dl 179ms
+        :: modules in use:
+        com.datastax.oss#java-driver-core-shaded;4.13.0 from central in [default]
+        com.datastax.oss#java-driver-mapper-runtime;4.13.0 from central in [default]
+        com.datastax.oss#java-driver-query-builder;4.13.0 from central in [default]
+        com.datastax.oss#java-driver-shaded-guava;25.1-jre-graal-sub-1 from central in [default]
+        com.datastax.oss#native-protocol;1.5.0 from central in [default]
+        com.datastax.spark#spark-cassandra-connector-driver_2.12;3.4.0 from central in [default]
+        com.datastax.spark#spark-cassandra-connector_2.12;3.4.0 from central in [default]
+        com.github.luben#zstd-jni;1.5.2-1 from central in [default]
+        com.github.spotbugs#spotbugs-annotations;3.1.12 from central in [default]
+        com.github.stephenc.jcip#jcip-annotations;1.0-1 from central in [default]
+        com.google.code.findbugs#jsr305;3.0.2 from central in [default]
+        com.thoughtworks.paranamer#paranamer;2.8 from central in [default]
+        com.typesafe#config;1.4.1 from central in [default]
+        commons-logging#commons-logging;1.1.3 from central in [default]
+        io.dropwizard.metrics#metrics-core;4.1.18 from central in [default]
+        org.apache.commons#commons-lang3;3.10 from central in [default]
+        org.apache.commons#commons-pool2;2.11.1 from central in [default]
+        org.apache.hadoop#hadoop-client-api;3.3.2 from central in [default]
+        org.apache.hadoop#hadoop-client-runtime;3.3.2 from central in [default]
+        org.apache.kafka#kafka-clients;3.3.1 from central in [default]
+        org.apache.spark#spark-sql-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.apache.spark#spark-token-provider-kafka-0-10_2.12;3.3.1 from central in [default]
+        org.hdrhistogram#HdrHistogram;2.1.12 from central in [default]
+        org.lz4#lz4-java;1.8.0 from central in [default]
+        org.reactivestreams#reactive-streams;1.0.3 from central in [default]
+        org.scala-lang#scala-reflect;2.12.11 from central in [default]
+        org.slf4j#slf4j-api;1.7.36 from central in [default]
+        org.spark-project.spark#unused;1.0.0 from central in [default]
+        org.xerial.snappy#snappy-java;1.1.8.4 from central in [default]
+        :: evicted modules:
+        org.apache.kafka#kafka-clients;2.8.1 by [org.apache.kafka#kafka-clients;3.3.1] in [default]
+        org.slf4j#slf4j-api;1.7.32 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        com.google.code.findbugs#jsr305;3.0.0 by [com.google.code.findbugs#jsr305;3.0.2] in [default]
+        org.slf4j#slf4j-api;1.7.26 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   33  |   0   |   0   |   4   ||   29  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-34999dfe-c96c-4857-bd80-c5e571bb78af
+        confs: [default]
+        0 artifacts copied, 29 already retrieved (0kB/111ms)
+23/08/14 05:46:48 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1691981215707).
+SparkSession available as 'spark'.
+>>> 
+
+# делаем необходимые импорты и создадим функцию для батчевого чтения:
+
+
+>>> from pyspark.sql import functions as F
+>>> from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+>>> wizards_df = spark.read \
+...     .format("org.apache.spark.sql.cassandra") \
+...     .options(table="universe_of_harry_potter", keyspace="dz_6") \
+...     .load()
+>>> 
+>>> wizards_df.printSchema()
+root
+ |-- id: integer (nullable = false)
+ |-- age: integer (nullable = true)
+ |-- firstname: string (nullable = true)
+ |-- houses: string (nullable = true)
+ |-- lastname: string (nullable = true)
+ |-- school: string (nullable = true)
+ |-- year_of_birth: integer (nullable = true)
+
+>>> 
+
+
+# теперь таблица у нас, можем посмотреть на неё. Так как мы использовали батчевое, а не потоковое тчение, то сделать это можно при помощи метода show():
+
+
+>>> wizards_df.show()
++---+----+--------------------+-----------+-----------+-----------+-------------+
+| id| age|           firstname|     houses|   lastname|     school|year_of_birth|
++---+----+--------------------+-----------+-----------+-----------+-------------+
+|  8|  71|         Tom Marvolo|  Slytherin|     Riddle|   Hogwarts|         1926|
+|  0|  43|               Harry| Gryffindor|     Potter|   Hogwarts|         1980|
+|  2|  43|            Hermione| Gryffindor|    Granger|   Hogwarts|         1979|
+|  4|  47|           Bellatrix|  Slytherin|  Lestrange|   Hogwarts|         1951|
+| 12| 114|             Gellert|       null|Grindelwald| Durmstrang|         1882|
+| 13|  17|       Albus Severus|  Slytherin|     Potter|   Hogwarts|         2006|
+| 11|  47|              Viktor|       null|       Krum| Durmstrang|         1976|
+|  1|  43|                 Ron| Gryffindor|    Weasley|   Hogwarts|         1980|
+|  3|  43|               Draco|  Slytherin|     Malfoy|   Hogwarts|         1980|
+|  9|  17|              Cedric| Hufflepuff|    Diggory|   Hogwarts|         1977|
+| 14|null|             Queenie|  Pukwudgie|  Goldstein| Ilvermorny|         1903|
+|  7| 115|Albus Percival Wu...| Gryffindor| Dumbledore|   Hogwarts|         1881|
+|100|null|          Porpentina|Thunderbird|  Goldstein| Ilvermorny|         1901|
+|  6|  37|             Severus|  Slytherin|      Snape|   Hogwarts|         1960|
+|  5|  45|               Fleur|       null|   Delacour|Beauxbatons|         1977|
+| 10|  42|                Luna|  Ravenclaw|   Lovegood|   Hogwarts|         1981|
++---+----+--------------------+-----------+-----------+-----------+-------------+
+
+
+# при помощи SQL-подобного языка Hive в Spark мы можем дополнить нашу таблицу. "Покинем пределы разума" и прибавим в неё Сивиллу Трелони:
+
+
+>>> Sybill = spark.sql('SELECT 15 AS id, \
+...                            61 AS age, \
+...                            "Sybill Patricia" AS firstname, \
+...                            "Trelawney" AS lastname, \
+...                            "Hogwarts" AS school, \
+...                            "Ravenclaw" AS houses, \
+...                            1961 AS year_of_birth');
+>>> Sybill.show()
++---+---+---------------+---------+--------+---------+-------------+
+| id|age|      firstname| lastname|  school|   houses|year_of_birth|
++---+---+---------------+---------+--------+---------+-------------+
+| 15| 61|Sybill Patricia|Trelawney|Hogwarts|Ravenclaw|         1961|
++---+---+---------------+---------+--------+---------+-------------+
+
+>>> 
+
+
+# добавим её к нашей таблице и вызовем всю таблицу:
+
+
+>>> Sybill.write \
+...     .format("org.apache.spark.sql.cassandra") \
+...     .options(table="universe_of_harry_potter", keyspace="dz_6") \
+...     .mode("append") \
+...     .save()
+>>> 
+>>> wizards_df.show()
++---+----+--------------------+-----------+-----------+-----------+-------------+
+| id| age|           firstname|     houses|   lastname|     school|year_of_birth|
++---+----+--------------------+-----------+-----------+-----------+-------------+
+| 12| 114|             Gellert|       null|Grindelwald| Durmstrang|         1882|
+|  7| 115|Albus Percival Wu...| Gryffindor| Dumbledore|   Hogwarts|         1881|
+| 15|  61|     Sybill Patricia|  Ravenclaw|  Trelawney|   Hogwarts|         1961|
+|  3|  43|               Draco|  Slytherin|     Malfoy|   Hogwarts|         1980|
+| 13|  17|       Albus Severus|  Slytherin|     Potter|   Hogwarts|         2006|
+| 11|  47|              Viktor|       null|       Krum| Durmstrang|         1976|
+|  1|  43|                 Ron| Gryffindor|    Weasley|   Hogwarts|         1980|
+|100|null|          Porpentina|Thunderbird|  Goldstein| Ilvermorny|         1901|
+|  6|  37|             Severus|  Slytherin|      Snape|   Hogwarts|         1960|
+|  9|  17|              Cedric| Hufflepuff|    Diggory|   Hogwarts|         1977|
+| 14|null|             Queenie|  Pukwudgie|  Goldstein| Ilvermorny|         1903|
+|  5|  45|               Fleur|       null|   Delacour|Beauxbatons|         1977|
+| 10|  42|                Luna|  Ravenclaw|   Lovegood|   Hogwarts|         1981|
+|  8|  71|         Tom Marvolo|  Slytherin|     Riddle|   Hogwarts|         1926|
+|  0|  43|               Harry| Gryffindor|     Potter|   Hogwarts|         1980|
+|  2|  43|            Hermione| Gryffindor|    Granger|   Hogwarts|         1979|
+|  4|  47|           Bellatrix|  Slytherin|  Lestrange|   Hogwarts|         1951|
++---+----+--------------------+-----------+-----------+-----------+-------------+
+
+
+# вот так мы видим, что к Cassandra мы специально не обращались, однако профессор Трелони тут как тут под своим id=15. Так произошло из-за механизмов 
+# кеширования данных для ускорения из чтения из Cassandra в Spark. Записывая данные через Spark, эти данные сразу же попадают в кеш Spark-а и при следующих 
+# чтениях Spark не делает новых запросов к Cassandra, а "добавляет" данные из кеша 
+
+# зная про кеш, попробуем посмотреть, какие операции где будут происходить. Для этого нам понадобится самописная функция, которая переопределит метод explain:
+
+
+>>> def explain(self, extended=True):
+...     if extended:
+...         print(self._jdf.queryExecution().toString())
+...     else:
+...         print(self._jdf.queryExecution().simpleString())
+... 
+
+
+# посмотрим, где происходит операция фильтрации по значениям из колонок.
+# вот фильтр по возрасту: 
+
+
+>>> wizards_df.filter(F.col("age") == 43).show()
++---+---+---------+----------+--------+--------+-------------+
+| id|age|firstname|    houses|lastname|  school|year_of_birth|
++---+---+---------+----------+--------+--------+-------------+
+|  1| 43|      Ron|Gryffindor| Weasley|Hogwarts|         1980|
+|  3| 43|    Draco| Slytherin|  Malfoy|Hogwarts|         1980|
+|  0| 43|    Harry|Gryffindor|  Potter|Hogwarts|         1980|
+|  2| 43| Hermione|Gryffindor| Granger|Hogwarts|         1979|
++---+---+---------+----------+--------+--------+-------------+
+
+>>> wizards_df.filter(F.col("age") == 43).explain()
+== Physical Plan ==
+*(1) Project [id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312]
++- *(1) Filter (age#307 = 43)
+   +- BatchScan[id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312] Cassandra Scan: dz_6.universe_of_harry_potter
+ - Cassandra Filters: []
+ - Requested Columns: [id,age,firstname,houses,lastname,school,year_of_birth] RuntimeFilters: []
+
+
+# а вот по школе:
+
+
+>>> wizards_df.filter(F.col("school") != 'Hogwarts').show()
++---+----+----------+-----------+-----------+-----------+-------------+
+| id| age| firstname|     houses|   lastname|     school|year_of_birth|
++---+----+----------+-----------+-----------+-----------+-------------+
+|  5|  45|     Fleur|       null|   Delacour|Beauxbatons|         1977|
+| 12| 114|   Gellert|       null|Grindelwald| Durmstrang|         1882|
+| 11|  47|    Viktor|       null|       Krum| Durmstrang|         1976|
+| 14|null|   Queenie|  Pukwudgie|  Goldstein| Ilvermorny|         1903|
+|100|null|Porpentina|Thunderbird|  Goldstein| Ilvermorny|         1901|
++---+----+----------+-----------+-----------+-----------+-------------+
+
+>>> wizards_df.filter(F.col("school") != 'Hogwarts').explain()
+== Physical Plan ==
+*(1) Project [id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312]
++- *(1) Filter (isnotnull(school#311) AND NOT (school#311 = Hogwarts))
+   +- BatchScan[id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312] Cassandra Scan: dz_6.universe_of_harry_potter
+ - Cassandra Filters: []
+ - Requested Columns: [id,age,firstname,houses,lastname,school,year_of_birth] RuntimeFilters: []
+
+
+# операции фильтрации прошли на стороне Spark. А вот запрос по одному выбранному id:
+
+
+>>> wizards_df.filter(F.col("id") == 14).show()
++---+----+---------+---------+---------+----------+-------------+
+| id| age|firstname|   houses| lastname|    school|year_of_birth|
++---+----+---------+---------+---------+----------+-------------+
+| 14|null|  Queenie|Pukwudgie|Goldstein|Ilvermorny|         1903|
++---+----+---------+---------+---------+----------+-------------+
+
+>>> wizards_df.filter(F.col("id") == 14).explain()
+== Physical Plan ==
+*(1) Project [id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312]
++- BatchScan[id#306, age#307, firstname#308, houses#309, lastname#310, school#311, year_of_birth#312] Cassandra Scan: dz_6.universe_of_harry_potter
+ - Cassandra Filters: [["id" = ?, 14]]
+ - Requested Columns: [id,age,firstname,houses,lastname,school,year_of_birth] RuntimeFilters: []
+
+
+# такой запрос полностью прошёл на стороне Cassandra, так как с подобными задачами она справляется легко и умело. Записать/достать строку для неё проще простого.
+
+# создадим теперь временную таблицу в Hive и таким образом совсем отвяжеися от Cassandra:
+
+
+wizards_df.createOrReplaceTempView("wizards")
+>>> spark.sql("SELECT school, COUNT(*) AS cnt FROM wizards GROUP BY school ORDER BY cnt DESC").show()
++-----------+---+                                                                                                                                                                                                                                         
+|     school|cnt|
++-----------+---+
+|   Hogwarts| 12|
+| Durmstrang|  2|
+| Ilvermorny|  2|
+|Beauxbatons|  1|
++-----------+---+
+
+>>> spark.sql("SELECT firstname, lastname, year_of_birth, age FROM wizards WHERE year_of_birth BETWEEN 1950 AND 1975").show()
++---------------+---------+-------------+---+
+|      firstname| lastname|year_of_birth|age|
++---------------+---------+-------------+---+
+|      Bellatrix|Lestrange|         1951| 47|
+|Sybill Patricia|Trelawney|         1961| 61|
+|        Severus|    Snape|         1960| 37|
++---------------+---------+-------------+---+
+
+
+____________________________________________________________________________________________________________________________________________
+
+# сохраним файл в формате csv и с помощью оператора spark-submit запустим рукописный скрипт, 
+# который прочитает нам csv и сохранит его как parquet в отдельную директорию:
+
+
+>>> import pandas as pd
+>>> pandas_df = wizards_df.toPandas()
+>>> pandas_df.to_csv("csv_df.csv", index=False)
+
+
+# перебросим файл на HDFS у прочитаем его оттуда, чтоб убедиться в том, что всё ок и норм:
+
+
+hdfroot@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -put /home/hsk/csv_df.csv /mysha/dz6/csv_file
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -cat /mysha/dz6/csv_file/csv_df.csv
+id,age,firstname,houses,lastname,school,year_of_birth
+7,115.0,Albus Percival Wulfric Brian,Gryffindor,Dumbledore,Hogwarts,1881
+13,17.0,Albus Severus,Slytherin,Potter,Hogwarts,2006
+11,47.0,Viktor,,Krum,Durmstrang,1976
+1,43.0,Ron,Gryffindor,Weasley,Hogwarts,1980
+8,71.0,Tom Marvolo,Slytherin,Riddle,Hogwarts,1926
+0,43.0,Harry,Gryffindor,Potter,Hogwarts,1980
+2,43.0,Hermione,Gryffindor,Granger,Hogwarts,1979
+4,47.0,Bellatrix,Slytherin,Lestrange,Hogwarts,1951
+15,61.0,Sybill Patricia,Ravenclaw,Trelawney,Hogwarts,1961
+100,,Porpentina,Thunderbird,Goldstein,Ilvermorny,1901
+6,37.0,Severus,Slytherin,Snape,Hogwarts,1960
+9,17.0,Cedric,Hufflepuff,Diggory,Hogwarts,1977
+14,,Queenie,Pukwudgie,Goldstein,Ilvermorny,1903
+5,45.0,Fleur,,Delacour,Beauxbatons,1977
+10,42.0,Luna,Ravenclaw,Lovegood,Hogwarts,1981
+12,114.0,Gellert,,Grindelwald,Durmstrang,1882
+3,43.0,Draco,Slytherin,Malfoy,Hogwarts,1980
+
+
+# файл готов, пишем скрипт spark-submit_stream.py, вот так он выглядит:
+
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# cat spark-submit_stream.py 
+#!/usr/bin/python3
+
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
+import datetime
+import subprocess
+
+subprocess.call(['hdfs', 'dfs', '-rm', '-r', '-f', '-skipTrash', '/mysha/dz6/checkpoint'])
+subprocess.call(['hdfs', 'dfs', '-rm', '-r', '-f', '-skipTrash', '/mysha/dz6/parquet_files'])
+
+spark = SparkSession.builder.appName("solin_spark").getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
+
+schema = StructType([
+    StructField("id", IntegerType()),
+    StructField("age", FloatType()),
+    StructField("firstname", StringType()),
+    StructField("houses", StringType()),
+    StructField("lastname", StringType()),
+    StructField("school", StringType()),
+    StructField("year_of_birth", IntegerType())
+])
+
+raw_files = spark.readStream.format("csv") \
+    .schema(schema) \
+    .options(path="/mysha/dz6/csv_file/", header=True) \
+    .load()
+
+load_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+def file_sink(df, freq=10):
+    return df.writeStream.format("parquet") \
+        .trigger(once=True) \
+        .option("checkpointLocation", "/mysha/dz6/checkpoint") \
+        .option("path", f"/mysha/dz6/parquet_files/p_date={str(load_time)}") \
+        .option("encoding", "UTF-8") \
+        .start()
+
+# timed_files = raw_files.withColumn("p_date", F.current_timestamp())
+timed_files = raw_files.withColumn("p_date", F.lit("load_time"))
+
+stream = file_sink(timed_files)
+
+stream.awaitTermination()
+
+print("DONE!!")
+
+
+# в скрипте весь предыдущий рабочий код просто собран в одном месте, разница от прошлых скриптов минимальная, вот какая:
+# - .trigger(once=True) - триггер, отвечающий за частоту запуска обработки данных в потоке. once=True значит то, что
+#   задача будет запущена только один раз и поток данных завершится сам после обработки всех данных (т.е. нам не надо вручную писать ....stop())
+# - stream.awaitTermination() - метод, вызываемый на запущенном потоке. Он останавливает выполнение программы до тех пор, пока поток не закончится 
+#   и остановится (ну или пока ошибка какая-то не упадёт). За счёт этого метода мы спокойно дожидаемся обработки всех строк и
+#   только потом в самом конце печатаем "DONE!!"
+  
+# запускаем скрипт при помощи spark-submit:
+
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# spark-submit spark-submit_stream.py 
+<тут будет много всего, а в конце, если всё ок и не случилось ошибок, мы увидим "DONE!!">
+
+
+# по идее, parquet теперь создан, проверим на HDFS, появился ли он:
+
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# hdfs dfs -ls /mysha/dz6/
+Found 3 items
+drwxr-xr-x   - root supergroup          0 2023-08-14 16:18 /mysha/dz6/checkpoint
+drwxr-xr-x   - root supergroup          0 2023-08-14 08:30 /mysha/dz6/csv_file
+drwxr-xr-x   - root supergroup          0 2023-08-14 16:18 /mysha/dz6/parquet_files
+root@mysha-Inspiron-11-3147:/home/GeekBrains# hdfs dfs -ls /mysha/dz6/parquet_files/
+Found 1 items
+drwxr-xr-x   - root supergroup          0 2023-08-14 16:19 /mysha/dz6/parquet_files/p_date=20230814161852
+root@mysha-Inspiron-11-3147:/home/GeekBrains# hdfs dfs -ls /mysha/dz6/parquet_files/p_date=20230814161852
+Found 2 items
+drwxr-xr-x   - root supergroup          0 2023-08-14 16:19 /mysha/dz6/parquet_files/p_date=20230814161852/_spark_metadata
+-rw-r--r--   1 root supergroup       3083 2023-08-14 16:19 /mysha/dz6/parquet_files/p_date=20230814161852/part-00000-c1dbfbfd-c8e5-4fb3-a66a-f17c41cc45c5-c000.snappy.parquet
+
+
+# проверили, файл создан, ура. Теперь можем попробовать вернуться в Spark-сессию и прочитать его:
+
+
+>>> schema = StructType([
+...     StructField("id", IntegerType()),
+...     StructField("age", FloatType()),
+...     StructField("firstname", StringType()),
+...     StructField("houses", StringType()),
+...     StructField("lastname", StringType()),
+...     StructField("school", StringType()),
+...     StructField("year_of_birth", IntegerType())
+... ])
+>>> spark.read.format("parquet").schema(schema) \
+...     .load("/mysha/dz6/parquet_files/") \
+...     .select("id", "firstname", "lastname", "year_of_birth", "age", "school", "houses", "p_date") \
+...     .show()
++---+--------------------+-----------+-------------+-----+-----------+-----------+--------------+
+| id|           firstname|   lastname|year_of_birth|  age|     school|     houses|        p_date|
++---+--------------------+-----------+-------------+-----+-----------+-----------+--------------+
+|  7|Albus Percival Wu...| Dumbledore|         1881|115.0|   Hogwarts| Gryffindor|20230814161852|
+| 13|       Albus Severus|     Potter|         2006| 17.0|   Hogwarts|  Slytherin|20230814161852|
+| 11|              Viktor|       Krum|         1976| 47.0| Durmstrang|       null|20230814161852|
+|  1|                 Ron|    Weasley|         1980| 43.0|   Hogwarts| Gryffindor|20230814161852|
+|  8|         Tom Marvolo|     Riddle|         1926| 71.0|   Hogwarts|  Slytherin|20230814161852|
+|  0|               Harry|     Potter|         1980| 43.0|   Hogwarts| Gryffindor|20230814161852|
+|  2|            Hermione|    Granger|         1979| 43.0|   Hogwarts| Gryffindor|20230814161852|
+|  4|           Bellatrix|  Lestrange|         1951| 47.0|   Hogwarts|  Slytherin|20230814161852|
+| 15|     Sybill Patricia|  Trelawney|         1961| 61.0|   Hogwarts|  Ravenclaw|20230814161852|
+|100|          Porpentina|  Goldstein|         1901| null| Ilvermorny|Thunderbird|20230814161852|
+|  6|             Severus|      Snape|         1960| 37.0|   Hogwarts|  Slytherin|20230814161852|
+|  9|              Cedric|    Diggory|         1977| 17.0|   Hogwarts| Hufflepuff|20230814161852|
+| 14|             Queenie|  Goldstein|         1903| null| Ilvermorny|  Pukwudgie|20230814161852|
+|  5|               Fleur|   Delacour|         1977| 45.0|Beauxbatons|       null|20230814161852|
+| 10|                Luna|   Lovegood|         1981| 42.0|   Hogwarts|  Ravenclaw|20230814161852|
+| 12|             Gellert|Grindelwald|         1882|114.0| Durmstrang|       null|20230814161852|
+|  3|               Draco|     Malfoy|         1980| 43.0|   Hogwarts|  Slytherin|20230814161852|
++---+--------------------+-----------+-------------+-----+-----------+-----------+--------------+
+
+
+# задача удалась. Мы записали паркет из csv в потоке, добавили к нему столбец current_timestamp и прочитали результат в Spark
+
+
+____________________________________________________________________________________________________________________________________________
+
+# доп.задание! Для него используем датасет из 5-й домашней работы (ТОП-250 фильмов по рейтингу Кинопоиска на май 2020-го)
+# первым делом устанавливаем cassandra-driver:
+
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# pip install cassandra-driver
+
+
+# теперь заходим в Python и импртируем Cluster из cassandra.cluster и pandas, после соединяемся с Cassandra и открываем сессию:
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# python3
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import pandas as pd
+>>> from cassandra.cluster import Cluster
+>>> cluster = Cluster(['127.0.0.1']) 
+>>> session = cluster.connect()
+
+
+# переходим в схему dz_6 и в ней создадим таблицу:
+
+
+>>> session.execute("USE dz_6")
+<cassandra.cluster.ResultSet object at 0x7fb522ebcbb0>
+>>> 
+>>> session.execute('CREATE TABLE IF NOT EXISTS movies ( '
+...     'rating int, '
+...     'rating_ball float, '
+...     'movie text, '
+...     'year int, '
+...     'country text, '
+...     'primary key (rating))')
+<cassandra.cluster.ResultSet object at 0x7fb522ebc970>
+>>>
+
+
+# csv-файл оформим как Pandas DataSet и в цикле перегоним его в созданную таблицу в Cassandra.
+# используем цикл с .iterrows(), он возвращает кортеж из индекса строки и значений. Интекс отбросим:
+
+
+>>> df = pd.read_csv('df_movie.csv')
+>>> df.head(3)
+   rating  rating_ball               movie  year country
+0       0        9.111  Побег из Шоушенка   1994     США
+1       1        9.062       Зеленая миля   1999     США
+2       2        8.913       Форрест Гамп   1994     США
+>>> 
+>>> for _, row in df.iterrows():
+...     session.execute(f"INSERT INTO movies (rating, rating_ball, movie, year, country) "
+...                     f"VALUES ({row['rating']}, {row['rating_ball']}, '{row['movie']}', {row['year']}, '{row['country']}')")
+... 
+<cassandra.cluster.ResultSet object at 0x7fb522e83a30>
+<cassandra.cluster.ResultSet object at 0x7fb522e81f30>
+...
+<cassandra.cluster.ResultSet object at 0x7fb522e6b4f0>
+<cassandra.cluster.ResultSet object at 0x7fb522e681c0>
+
+
+# получили много строчек с объектами, ошибок не получили, кажется всё удалось, но на всякий случай проверим
+# применив к result_set метод .all() для гарантии того, что все значения в строках будут показаны:
+
+>>> result_set = session.execute("SELECT * FROM dz_6.movies")
+>>> for i in result_set.all():
+...     print(i)
+... 
+Row(rating=23, country='СССР', movie='Бриллиантовая рука ', rating_ball=8.515999794006348, year=1968)
+Row(rating=114, country='США', movie='Один дома ', rating_ball=8.232000350952148, year=1990)
+Row(rating=53, country='США', movie='Семь ', rating_ball=8.295000076293945, year=1995)
+Row(rating=110, country='Великобритания', movie='Мальчик в полосатой пижаме ', rating_ball=8.17300033569336, year=2008)
+Row(rating=91, country='США', movie='Балто ', rating_ball=8.32800006866455, year=1995)
+Row(rating=128, country='СССР', movie='Шерлок Холмс и доктор Ватсон: Король шантажа ', rating_ball=8.354999542236328, year=1980)
+Row(rating=247, country='СССР', movie='Иди и смотри ', rating_ball=8.07699966430664, year=1985)
+Row(rating=214, country='США', movie='Подмена ', rating_ball=7.934999942779541, year=2008)
+Row(rating=117, country='Франция', movie='Артист ', rating_ball=7.941999912261963, year=2011)
+Row(rating=144, country='США', movie='Лицо со шрамом ', rating_ball=8.180999755859375, year=1983)
+Row(rating=120, country='СССР', movie='Добро пожаловать; или Посторонним вход воспрещен ', rating_ball=8.262999534606934, year=1964)
+Row(rating=219, country='США', movie='Крепкий орешек ', rating_ball=8.019000053405762, year=1988)
+Row(rating=140, country='США', movie='Назад в будущее\xa03 ', rating_ball=8.168000221252441, year=1990)
+Row(rating=55, country='США', movie='Как приручить дракона ', rating_ball=8.199999809265137, year=2010)
+Row(rating=129, country='Италия', movie='Легенда о пианисте ', rating_ball=8.137999534606934, year=1998)
+Row(rating=33, country='США', movie='Американская история\xa0X ', rating_ball=8.295999526977539, year=1998)
+Row(rating=132, country='США', movie='Привидение ', rating_ball=8.163999557495117, year=1990)
+Row(rating=185, country='Польша', movie='Знахарь ', rating_ball=8.15999984741211, year=1981)
+Row(rating=5, country='США', movie='Начало ', rating_ball=8.661999702453613, year=2010)
+Row(rating=28, country='СССР', movie='В бой идут одни «старики» ', rating_ball=8.708999633789062, year=1973)
+Row(rating=105, country='США', movie='Малышка на миллион ', rating_ball=8.074000358581543, year=2004)
+Row(rating=123, country='США', movie='Невидимая сторона ', rating_ball=8.149999618530273, year=2009)
+... ну и т.д....
+
+
+# строк много, кажется всё верно. Сделаем контрольную проверку, заядя неповредственно в Cassandra
+# закрываем соединение с кластером, уходим из Python, приходим в Cassandra:
+
+
+>>> session.shutdown()
+>>> cluster.shutdown()
+>>> 
+[3]+  Stopped                 python3
+
+root@mysha-Inspiron-11-3147:/home/GeekBrains# cqlsh
+Connected to Test Cluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.3 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+cqlsh>
+
+
+# проверим в системной схеме, пявилась ли наша новая таблица в схеме dz_6:
+
+
+cqlsh> SELECT keyspace_name, table_name FROM system_schema.tables WHERE keyspace_name = 'dz_6';
+
+ keyspace_name | table_name
+---------------+--------------------------
+          dz_6 |                   movies
+          dz_6 | universe_of_harry_potter
+
+(2 rows)
+
+
+# таблица появилась, ура, проситаем первые 10 строк из неё:
+
+
+cqlsh> SELECT * FROM dz_6.movies LIMIT 10;
+
+ rating | country        | movie                                         | rating_ball | year
+--------+----------------+-----------------------------------------------+-------------+------
+     23 |           СССР |                           Бриллиантовая рука  |       8.516 | 1968
+    114 |            США |                                    Один дома  |       8.232 | 1990
+     53 |            США |                                         Семь  |       8.295 | 1995
+    110 | Великобритания |                   Мальчик в полосатой пижаме  |       8.173 | 2008
+     91 |            США |                                        Балто  |       8.328 | 1995
+    128 |           СССР | Шерлок Холмс и доктор Ватсон: Король шантажа  |       8.355 | 1980
+    247 |           СССР |                                 Иди и смотри  |       8.077 | 1985
+    214 |            США |                                      Подмена  |       7.935 | 2008
+    117 |        Франция |                                       Артист  |       7.942 | 2011
+    144 |            США |                               Лицо со шрамом  |       8.181 | 1983
+
+(10 rows)
+cqlsh> 
+
+
+# ну и для полной гарантии посчитаем количество записей, их должно быть как в оригинальном csv 250 шт.:
+
+
+cqlsh> SELECT COUNT(rating) FROM dz_6.movies;
+
+ system.count(rating)
+----------------------
+                  250
+
+(1 rows)
+
+Warnings :
+Aggregation query used without partition key
+
+cqlsh> exit
+
+# всё верно. Таблицу удалось поностью залить в Cassandra при помощи библиотеки cassandra-driver
+ 
+
