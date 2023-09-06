@@ -1,0 +1,355 @@
+# пример того, как в качестве учебного примера сгенерировать синтетические данные при помощи SQL-синтаксиса и применить к ним машинное обучение 
+
+# открываем Spark-сессию:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+
+...
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   33  |   0   |   0   |   4   ||   29  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-af0712de-ec6b-4865-96f2-7a8710085d70
+        confs: [default]
+        0 artifacts copied, 29 already retrieved (0kB/100ms)
+23/08/18 06:31:58 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1692329526052).
+SparkSession available as 'spark'.
+>>> 
+
+
+# импортируем все необходимые библиотеки и модули:
+
+
+>>> 
+>>> from pyspark.sql.types import IntegerType
+>>> from pyspark.sql import functions as F
+>>> from pyspark.ml.classification import LogisticRegression
+>>> from pyspark.ml.feature import OneHotEncoder, StringIndexer, IndexToString, VectorAssembler
+>>> from pyspark.ml import Pipeline, PipelineModel
+>>> from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+>>> 
+
+
+# создаём рандомный датасет:
+
+
+>>> my_df = spark.createDataFrame(range(1, 200000), IntegerType())
+>>> items_df = my_df.select(F.col("value").alias("order_id"), \
+...                         F.round((F.rand()*49999)+1).alias("user_id").cast("integer"), \
+...                         F.round((F.rand()*9)+1).alias("items_count").cast("integer")) \
+...     .withColumn("price", (F.col("items_count") * F.round((F.rand()*999)+1)).cast("integer")) \
+...     .withColumn("order_date", F.from_unixtime(F.unix_timestamp(F.current_date()) + (F.lit(F.col("order_id")*10))))
+>>> items_df.show(3)
++--------+-------+-----------+-----+-------------------+
+|order_id|user_id|items_count|price|         order_date|
++--------+-------+-----------+-----+-------------------+
+|       1|  33926|          9|  801|2023-08-18 00:00:10|
+|       2|  31844|          3| 1575|2023-08-18 00:00:20|
+|       3|  34427|          9| 8055|2023-08-18 00:00:30|
++--------+-------+-----------+-----+-------------------+
+only showing top 3 rows
+
+>>> items_df.count()
+199999 
+
+
+# сохраним его как .parquet, но перед этим, чтоб не было большого количества предупреждений, нужно в пространстве Hive Metastore создать одноимённую будущему паркету базу, а иначе ошибки полезут:
+
+
+>>> spark.sql("CREATE DATABASE IF NOT EXISTS sint_sales")
+DataFrame[]
+>>> spark.sql("DROP TABLE IF EXISTS sint_sales.sales")
+DataFrame[]
+>>> items_df.write.format("parquet").option("path", "/mysha/lesson7/parquet_files/sales").saveAsTable("sint_sales.sales", mode="overwrite")
+23/08/18 07:39:17 WARN SessionState: METASTORE_FILTER_HOOK will be ignored, since hive.security.authorization.manager is set to instance of HiveAuthorizerFactory.                                                                                 
+23/08/18 07:39:17 WARN HiveConf: HiveConf of name hive.internal.ss.authz.settings.applied.marker does not exist
+23/08/18 07:39:17 WARN HiveConf: HiveConf of name hive.stats.jdbc.timeout does not exist
+23/08/18 07:39:17 WARN HiveConf: HiveConf of name hive.stats.retries.wait does not exist
+>>> 
+
+
+# проверим, прочитаем этот паркет двумя способами:
+
+
+>>> spark.read.format("parquet").load("/mysha/lesson7/parquet_files/sales").show(5)
++--------+-------+-----------+-----+-------------------+
+|order_id|user_id|items_count|price|         order_date|
++--------+-------+-----------+-----+-------------------+
+|       1|  33926|          9|  801|2023-08-18 00:00:10|
+|       2|  31844|          3| 1575|2023-08-18 00:00:20|
+|       3|  34427|          9| 8055|2023-08-18 00:00:30|
+|       4|   9196|          8| 4632|2023-08-18 00:00:40|
+|       5|  25367|          9| 3303|2023-08-18 00:00:50|
++--------+-------+-----------+-----+-------------------+
+only showing top 5 rows
+
+>>> # или 
+
+>>> spark.table("sint_sales.sales").show(5)
++--------+-------+-----------+-----+-------------------+
+|order_id|user_id|items_count|price|         order_date|
++--------+-------+-----------+-----+-------------------+
+|       1|  33926|          9|  801|2023-08-18 00:00:10|
+|       2|  31844|          3| 1575|2023-08-18 00:00:20|
+|       3|  34427|          9| 8055|2023-08-18 00:00:30|
+|       4|   9196|          8| 4632|2023-08-18 00:00:40|
+|       5|  25367|          9| 3303|2023-08-18 00:00:50|
++--------+-------+-----------+-----+-------------------+
+only showing top 5 rows
+
+items_df = spark.table("sint_sales.sales")
+
+
+# создаём пока пустую таблицу users по пути /mysha/lesson7/parquet_files/users:
+
+
+>>> spark.sql("DROP TABLE IF EXISTS sint_sales.users")
+DataFrame[]
+>>> spark.sql("""CREATE TABLE sint_sales.users (user_id INT, gender STRING, age STRING, segment STRING) stored as parquet location '/mysha/lesson7/parquet_files/users' """)
+DataFrame[]
+>>> 
+
+
+# заполним синтетическими данными и проверим:
+
+
+>>> 
+>>> spark.sql("""
+...     INSERT INTO sint_sales.users
+...         SELECT user_id,
+...         CASE
+...             WHEN PMOD(user_id, 2) = 0 THEN 'M' 
+...             ELSE 'F'
+...         END,
+...         CASE
+...             WHEN PMOD(user_id, 3) = 0 THEN 'young'
+...             WHEN PMOD(user_id, 3) = 1 THEN 'midage'
+...             ELSE 'old'
+...         END,
+...         CASE
+...             WHEN s > 23 THEN 'happy'
+...             WHEN s > 15 THEN 'neutral'
+...             ELSE 'shy'
+...         END
+...     FROM (
+...         SELECT 
+...             SUM(items_count) AS s, 
+...             user_id 
+...         FROM sint_sales.sales 
+...         GROUP BY user_id
+...     ) AS t
+... """)
+DataFrame[]
+>>>
+>>> spark.table("sint_sales.users").show(10)
++-------+------+------+-------+
+|user_id|gender|   age|segment|
++-------+------+------+-------+
+|   7340|     M|   old|  happy|
+|  20135|     F|   old|neutral|
+|   1580|     M|   old|neutral|
+|  11458|     M|midage|    shy|
+|  10817|     F|   old|  happy|
+|   3749|     F|   old|  happy|
+|  15957|     F| young|neutral|
+|  37263|     F| young|  happy|
+|  13623|     F| young|    shy|
+|  48510|     M| young|  happy|
++-------+------+------+-------+
+only showing top 10 rows
+
+
+# остальные разные таблицы создадим тоже и посчитаем, сколько их всего в базе получилось::
+
+
+>>> 
+>>> spark.sql("""CREATE TABLE IF NOT EXISTS sint_sales.users_known stored as parquet location '/mysha/lesson7/parquet_files/users_known' AS SELECT * FROM sint_sales.users WHERE user_id < 30000""")
+DataFrame[]
+>>> 
+>>> spark.sql("""CREATE TABLE IF NOT EXISTS sint_sales.users_uknown stored as parquet location '/mysha/lesson7/parquet_files/users_uknown' AS SELECT * FROM sint_sales.users WHERE user_id >= 30000""")
+DataFrame[]
+>>> 
+>>> spark.sql("""CREATE TABLE IF NOT EXISTS sint_sales.sales_known stored as parquet location '/mysha/lesson7/parquet_files/sales_known' AS SELECT * FROM sint_sales.sales WHERE user_id < 30000""")
+DataFrame[]
+>>>
+>>> spark.sql("""CREATE TABLE IF NOT EXISTS sint_sales.sales_uknown stored as parquet location '/mysha/lesson7/parquet_files/sales_uknown' AS SELECT * FROM sint_sales.sales WHERE user_id >= 30000""")
+DataFrame[]
+>>>  
+>>> spark.sql("SHOW TABLES FROM sint_sales").show()
++----------+------------+-----------+
+| namespace|   tableName|isTemporary|
++----------+------------+-----------+
+|sint_sales|       sales|      false|
+|sint_sales| sales_known|      false|
+|sint_sales|sales_uknown|      false|
+|sint_sales|       users|      false|
+|sint_sales| users_known|      false|
+|sint_sales|users_uknown|      false|
++----------+------------+-----------+
+
+>>> 
+
+
+# объединим таблицы sales_known и users_known в группировках:
+
+
+>>> 
+>>> users_known = spark.sql("""
+... SELECT
+...     COUNT(*) AS c,
+...     SUM(items_count) AS s1,
+...     MAX(items_count) AS ma1,
+...     MIN(items_count) AS mi1,
+...     SUM(price) AS s2,
+...     MAX(price) AS ma2,
+...     MIN(price) AS mi2,
+...     u.gender,
+...     u.age,
+...     u.user_id,
+...     u.segment
+... FROM sint_sales.sales_known AS s
+... JOIN sint_sales.users_known AS u ON s.user_id = u.user_id
+... GROUP BY u.user_id, u.gender, u.age, u.segment
+... """)
+>>> 
+>>> df = users_known
+>>> df.show(2)
++---+---+---+---+-----+----+----+------+-----+-------+-------+
+|  c| s1|ma1|mi1|   s2| ma2| mi2|gender|  age|user_id|segment|
++---+---+---+---+-----+----+----+------+-----+-------+-------+
+|  4| 19|  7|  4|12867|6783|1096|     F|  old|   2033|neutral|
+|  4| 28| 10|  3|12845|4785|1440|     F|young|   4767|neutral|
++---+---+---+---+-----+----+----+------+-----+-------+-------+
+only showing top 2 rows
+
+# что получилось в датафрейме:
+# 
+# - c - количество записей на каждого пользователя 
+# - s1 - количество купленных товаров
+# - ma1 - максимальное количество заказов
+# - mi1 - минимальное количество заказов
+# - s2 - общая стоимость купленных товаров
+# - ma2 - максимальная стоимость
+# - mi2 - минимальная стоимость
+# - gender - пол
+# - age - возраст по категориям:
+#     - young - молодёжь
+#     - midage - средний возраст
+#     - old - пожилые
+# - user_id - id пользователя
+# - segment - категория (сегмент) пользователя
+#     - happy - "весёлые"
+#     - neutral - "нейтральные"
+#     - shy - "застенчивые"
+
+
+# переходим к предсказанию таргета segment:
+
+#  определяем категориальные поля и пустой список для stages, в него будем собирать шаги для трансформатора:
+
+
+>>> categoricalColumns = ['gender', 'age']
+>>> stages = []
+
+
+# кодируем категориальные признаки и таргет с помощью StringIndexer и OneHotEncoder: 
+
+
+>>> for catCol in categoricalColumns:
+...     stringIndexer = StringIndexer(inputCol=catCol, outputCol=catCol+'_Index')
+...     encoder = OneHotEncoder(inputCols=[stringIndexer.getOutputCol()], outputCols=[catCol+'_classVec'])
+...     stages += [stringIndexer, encoder]
+... 
+>>> label_stringIdx = StringIndexer(inputCol = 'segment', outputCol='label')
+>>> stages += [label_stringIdx]
+
+
+# определякм численные признаки, добавляем к ним трансформированные категориальные и всё это с помощью VectorAssembler собираем в вектор:
+
+
+>>> numericCols = ['c', 's1', 'ma1', 'mi1', 's2', 'ma2', 'mi2']
+>>> assemblerInputs = [c+'_classVec' for c in categoricalColumns] + numericCols
+>>> assembler = VectorAssembler(inputCols=assemblerInputs, outputCol='features')
+>>> stages += [assembler]
+
+
+# модель - линейная регрессия на 10 итераций
+
+
+>>> lr = LogisticRegression(maxIter=10)
+>>> stages += [lr]
+
+
+# объект indexToStringEstimator будет создавать поле category, представляющее собой, по сути, всё тот же таргет segment, но по предсказанию:
+
+
+>>> label_stringIdx_fit = label_stringIdx.fit(users_known)
+>>> indexToStringEstimator = IndexToString().setInputCol('prediction').setOutputCol('category').setLabels(label_stringIdx_fit.labels)                                                                                                              
+>>> stages += [indexToStringEstimator]
+
+
+# собираем трансформеры и эстиматор в пайплайн и запускаем обучение:
+
+
+>>> pipeline = Pipeline().setStages(stages)
+>>> pipelineModel = pipeline.fit(users_known)
+23/08/18 08:10:00 WARN InstanceBuilder$NativeBLAS: Failed to load implementation from:dev.ludovic.netlib.blas.JNIBLAS              (0 + 4) / 4]
+23/08/18 08:10:00 WARN InstanceBuilder$NativeBLAS: Failed to load implementation from:dev.ludovic.netlib.blas.ForeignLinkerBLAS
+>>> ge 82:==============================================================================================================>          (2 + 2) / 4]
+
+
+# сохраняем обученную модель:
+
+
+>>> pipelineModel.write().overwrite().save('/mysha/lesson7/my_LR_model')
+>>>                                                                                                                                                                                                                                                
+
+
+# получим предсказание и сохраним датасет с ним в переменную. Посмотрим на результат:
+
+
+>>> result_df = pipelineModel.transform(users_known)
+>>> result_df.show(10)
++---+---+---+---+-----+----+----+------+------+-------+-------+------------+---------------+---------+-------------+-----+--------------------+--------------------+--------------------+----------+--------+                                      
+|  c| s1|ma1|mi1|   s2| ma2| mi2|gender|   age|user_id|segment|gender_Index|gender_classVec|age_Index| age_classVec|label|            features|       rawPrediction|         probability|prediction|category|
++---+---+---+---+-----+----+----+------+------+-------+-------+------------+---------------+---------+-------------+-----+--------------------+--------------------+--------------------+----------+--------+
+|  4| 19|  7|  4|12867|6783|1096|     F|   old|   2033|neutral|         1.0|      (1,[],[])|      1.0|(2,[1],[1.0])|  2.0|[0.0,0.0,1.0,4.0,...|[-0.1219545421688...|[0.29348833640601...|       1.0|     shy|
+|  4| 28| 10|  3|12845|4785|1440|     F| young|   4767|neutral|         1.0|      (1,[],[])|      2.0|    (2,[],[])|  2.0|[0.0,0.0,0.0,4.0,...|[0.31492847204146...|[0.44336082549573...|       0.0|   happy|
+|  6| 29|  9|  1|16692|6510| 665|     M| young|   6810|    shy|         0.0|  (1,[0],[1.0])|      2.0|    (2,[],[])|  1.0|[1.0,0.0,0.0,6.0,...|[0.23402566291108...|[0.41345367069531...|       0.0|   happy|
+|  3| 22| 10|  5|11582|5620|1057|     F|midage|   7033|  happy|         1.0|      (1,[],[])|      0.0|(2,[0],[1.0])|  0.0|[0.0,1.0,0.0,3.0,...|[0.00894314079226...|[0.33442007349472...|       2.0| neutral|
+|  7| 44|  9|  1|25208|8379| 352|     M| young|  22602|  happy|         0.0|  (1,[0],[1.0])|      2.0|    (2,[],[])|  0.0|[1.0,0.0,0.0,7.0,...|[0.93665879582062...|[0.66360426233299...|       0.0|   happy|
+| 14| 60|  9|  1|28018|4158| 104|     M|midage|  23284|  happy|         0.0|  (1,[0],[1.0])|      0.0|(2,[0],[1.0])|  0.0|[1.0,1.0,0.0,14.0...|[0.96817606453676...|[0.66562991613627...|       0.0|   happy|
+|  8| 51| 10|  3|27048|7722| 400|     M|midage|  29908|neutral|         0.0|  (1,[0],[1.0])|      0.0|(2,[0],[1.0])|  2.0|[1.0,1.0,0.0,8.0,...|[1.07438547558500...|[0.69928175523945...|       0.0|   happy|
+|  9| 60| 10|  2|32187|8980| 484|     M|   old|   4178|    shy|         0.0|  (1,[0],[1.0])|      1.0|(2,[1],[1.0])|  1.0|[1.0,0.0,1.0,9.0,...|[1.48583819911651...|[0.80731714833751...|       0.0|   happy|
+|  4| 23|  9|  2|17102|8820| 260|     F| young|  26103|  happy|         1.0|      (1,[],[])|      2.0|    (2,[],[])|  0.0|[0.0,0.0,0.0,4.0,...|[0.09056673132273...|[0.36209423260380...|       0.0|   happy|
+|  2|  4|  3|  1|  853| 558| 295|     F|midage|  19201|    shy|         1.0|      (1,[],[])|      0.0|(2,[0],[1.0])|  1.0|[0.0,1.0,0.0,2.0,...|[-0.3593925784668...|[0.19568184893114...|       1.0|     shy|
++---+---+---+---+-----+----+----+------+------+-------+-------+------------+---------------+---------+-------------+-----+--------------------+--------------------+--------------------+----------+--------+
+only showing top 10 rows
+
+
+# категорий у таргета у нас было три, так что посчитаем Accuracy при помощи MulticlassClassificationEvaluator:
+
+
+>>> evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
+>>> accuracy = evaluator.evaluate(result_df)
+>>> accuracy
+0.4926998985234121
+
+# результат предсказание хуже некуда. Но оно и неудивительно - данные рандомные, синтетические, бессмысленные
+# все шаги были проделаны исключительно в учебных целях, чтоб показать - можем, умеем, практикуем))
+

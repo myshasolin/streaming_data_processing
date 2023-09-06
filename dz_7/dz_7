@@ -1,0 +1,386 @@
+# создадим топик и отправим в него json-файл про вино. Посмотрим на него:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-topics.sh --create --topic dz7 --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 config retention.ms=-1
+Created topic dz7.
+
+
+# зальём в топик JSON:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-producer.sh --topic dz7 --bootstrap-server localhost:9092 < /path/inside/container/lessons/7/dz_7/wine_mini.json
+
+
+# вот как выглядят записи в топике:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-consumer.sh --topic dz7 --bootstrap-server localhost:9092 --from-beginning --max-messages 2
+{"fixed acidity": 7.4, "volatile acidity": 0.17, "citric acid": 0.29, "residual sugar": 1.4, "chlorides": 0.047, "free sulfur dioxide": 23.0, "total sulfur dioxide": 107.0, "density": 0.9939, "pH": 3.52, "sulphates": 0.65, "alcohol": 10.4, "quality": 6, "Type": "White Wine"}
+{"fixed acidity": 5.3, "volatile acidity": 0.31, "citric acid": 0.38, "residual sugar": 10.5, "chlorides": 0.031, "free sulfur dioxide": 53.0, "total sulfur dioxide": 140.0, "density": 0.99321, "pH": 3.34, "sulphates": 0.46, "alcohol": 11.7, "quality": 6, "Type": "White Wine"}
+Processed a total of 2 messages
+
+
+# теперь открываем Spark-сессию:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/08/23 15:47:29 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/08/23 15:47:29 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+com.datastax.spark#spark-cassandra-connector_2.12 added as a dependency
+......
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   33  |   0   |   0   |   4   ||   29  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-343dc9b3-1f23-4332-acb0-b16e2e3bc3e4
+        confs: [default]
+        0 artifacts copied, 29 already retrieved (0kB/72ms)
+23/08/23 15:47:36 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4040
+Spark context available as 'sc' (master = local[*], app id = local-1692794865299).
+SparkSession available as 'spark'.
+>>> 
+
+
+# подгрузим необходимые импорты:
+
+
+>>> from pyspark.sql import functions as F
+>>> from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, ArrayType
+>>> from pyspark.ml import PipelineModel
+>>> import datetime
+>>> import subprocess
+>>>
+
+
+# формируем схему данных:
+
+>>> schema = StructType([
+...     StructField("fixed acidity", DoubleType()),
+...     StructField("volatile acidity", DoubleType()),
+...     StructField("citric acid", DoubleType()),
+...     StructField("residual sugar", DoubleType()),
+...     StructField("chlorides", DoubleType()),
+...     StructField("free sulfur dioxide", DoubleType()),
+...     StructField("total sulfur dioxide", DoubleType()),
+...     StructField("density", DoubleType()),
+...     StructField("pH", DoubleType()),
+...     StructField("sulphates", DoubleType()),
+...     StructField("alcohol", DoubleType()),
+...     StructField("quality", IntegerType()),
+...     StructField("Type", StringType())
+... ])
+>>> 
+
+
+# создаём стириминговый датасет из топика:
+
+
+>>> raw_orders = spark.readStream.format("kafka") \
+...     .option("kafka.bootstrap.servers", "localhost:9092") \
+...     .option("subscribe", "dz7") \
+...     .option("startingOffsets", "earliest") \
+...     .option("maxOffsetsPerTrigger", "5") \
+...     .load()  
+>>>     
+>>> value_orders = raw_orders.select(F.from_json(F.col("value").cast("String"), schema).alias("value"), "topic", "offset") \
+...                          .select("value.*", "topic", "offset")
+>>> 
+
+
+# вот функция для стрима в консоль:
+
+
+>>> def console_output_ckeckpointed(df, freq):
+...     return  df.writeStream \
+...         .format("console") \
+...         .trigger(processingTime=f'{freq} seconds') \
+...         .option("truncate", False) \
+...         .option("checkpointLocation", "/mysha/dz7/checkpoint") \
+...         .start()
+... 
+>>> 
+     
+
+# загружаем обученную и заранее сохранённую модель из HDFS:
+
+
+>>> model_path = "hdfs://localhost:8020/mysha/dz7/wine_lr_Model"
+>>> model = PipelineModel.load(model_path)
+>>> model                                                                                                                                                                                                                                                                                   
+PipelineModel_bbd065cc84ed
+>>> 
+
+   
+# применяем модель к датасету и добавляем дату записи ещё:
+
+
+>>> predictions = model.transform(value_orders)
+>>> predictions = predictions.withColumn("date", F.current_timestamp())
+>>> 
+
+
+# можно посмотреть на схему, которая у нас теперь есть:
+
+
+>>> predictions.printSchema()
+root
+ |-- fixed acidity: double (nullable = true)
+ |-- volatile acidity: double (nullable = true)
+ |-- citric acid: double (nullable = true)
+ |-- residual sugar: double (nullable = true)
+ |-- chlorides: double (nullable = true)
+ |-- free sulfur dioxide: double (nullable = true)
+ |-- total sulfur dioxide: double (nullable = true)
+ |-- density: double (nullable = true)
+ |-- pH: double (nullable = true)
+ |-- sulphates: double (nullable = true)
+ |-- alcohol: double (nullable = true)
+ |-- quality: integer (nullable = true)
+ |-- Type: string (nullable = true)
+ |-- topic: string (nullable = true)
+ |-- offset: long (nullable = true)
+ |-- label: double (nullable = false)
+ |-- features: vector (nullable = true)
+ |-- rawPrediction: vector (nullable = true)
+ |-- probability: vector (nullable = true)
+ |-- prediction: double (nullable = false)
+ |-- date: timestamp (nullable = false)
+
+>>> 
+
+
+# из столбцов оставим себе только offset, Type, label, prediction, probability и date:
+
+
+>>> df = predictions.select('offset', 'Type', 'label', 'prediction', 'probability', 'date')
+>>> df.printSchema()
+root
+ |-- offset: long (nullable = true)
+ |-- Type: string (nullable = true)
+ |-- label: double (nullable = false)
+ |-- prediction: double (nullable = false)
+ |-- probability: vector (nullable = true)
+ |-- date: timestamp (nullable = false)
+
+
+# убедимся в том, что предсказание есть - запустим стрим на несколько батчей в консоль с выводом полей prediction и probability:
+
+
+>>> st = console_output_ckeckpointed(df, 15)
+23/08/23 16:03:25 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+-------------------------------------------                                                                                                                                                                                                                                                 
+Batch: 0
+-------------------------------------------
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+|offset|Type      |label|prediction|probability                              |date                   |
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+|0     |White Wine|0.0  |0.0       |[0.9282348903749001,0.07176510962509985] |2023-08-23 16:03:30.483|
+|1     |White Wine|0.0  |0.0       |[0.9999902909107347,9.709089265341753E-6]|2023-08-23 16:03:30.483|
+|2     |White Wine|0.0  |0.0       |[0.9965484729383481,0.00345152706165186] |2023-08-23 16:03:30.483|
+|3     |White Wine|0.0  |0.0       |[0.9999164661109876,8.353388901238823E-5]|2023-08-23 16:03:30.483|
+|4     |White Wine|0.0  |0.0       |[0.999979269456729,2.0730543271008095E-5]|2023-08-23 16:03:30.483|
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+
+-------------------------------------------
+Batch: 1
+-------------------------------------------
++------+----------+-----+----------+------------------------------------------+-----------------------+
+|offset|Type      |label|prediction|probability                               |date                   |
++------+----------+-----+----------+------------------------------------------+-----------------------+
+|5     |White Wine|0.0  |0.0       |[0.9997526580363304,2.473419636696006E-4] |2023-08-23 16:03:37.362|
+|6     |White Wine|0.0  |0.0       |[0.9999686508635557,3.134913644431414E-5] |2023-08-23 16:03:37.362|
+|7     |White Wine|0.0  |0.0       |[0.9996102438024459,3.8975619755410307E-4]|2023-08-23 16:03:37.362|
+|8     |White Wine|0.0  |0.0       |[0.9918174965409092,0.008182503459090773] |2023-08-23 16:03:37.362|
+|9     |White Wine|0.0  |0.0       |[0.9999529687152419,4.703128475813667E-5] |2023-08-23 16:03:37.362|
++------+----------+-----+----------+------------------------------------------+-----------------------+
+
+-------------------------------------------
+Batch: 2
+-------------------------------------------
++------+----------+-----+----------+------------------------------------------+-----------------------+
+|offset|Type      |label|prediction|probability                               |date                   |
++------+----------+-----+----------+------------------------------------------+-----------------------+
+|10    |Red Wine  |1.0  |1.0       |[2.753293648131593E-4,0.9997246706351869] |2023-08-23 16:03:45.033|
+|11    |White Wine|0.0  |0.0       |[0.9999920525671437,7.947432856258985E-6] |2023-08-23 16:03:45.033|
+|12    |White Wine|0.0  |0.0       |[0.9999978972390886,2.1027609113932755E-6]|2023-08-23 16:03:45.033|
+|13    |Red Wine  |1.0  |1.0       |[2.9018198082607712E-5,0.9999709818019173]|2023-08-23 16:03:45.033|
+|14    |Red Wine  |1.0  |1.0       |[0.001018348771256643,0.9989816512287434] |2023-08-23 16:03:45.033|
++------+----------+-----+----------+------------------------------------------+-----------------------+
+
+-------------------------------------------
+Batch: 3
+-------------------------------------------
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+|offset|Type      |label|prediction|probability                              |date                   |
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+|15    |White Wine|0.0  |0.0       |[0.9995705430137691,4.294569862308695E-4]|2023-08-23 16:04:00.029|
+|16    |Red Wine  |1.0  |1.0       |[0.012362149694191768,0.9876378503058082]|2023-08-23 16:04:00.029|
+|17    |White Wine|0.0  |0.0       |[0.999936721925299,6.327807470096758E-5] |2023-08-23 16:04:00.029|
+|18    |Red Wine  |1.0  |1.0       |[3.40054420790834E-4,0.9996599455792091] |2023-08-23 16:04:00.029|
+|19    |White Wine|0.0  |0.0       |[0.9996891809188153,3.108190811846878E-4]|2023-08-23 16:04:00.029|
++------+----------+-----+----------+-----------------------------------------+-----------------------+
+
+st.stop()
+>>> 
+
+# ура, предсказание делается и в таблицу записывается, в консоли мы в этом убедились и теперь можем перенаправить стрим из топика в БД Cassandra
+# перед этим очистим папку с чекпоинтами:
+
+
+>>> subprocess.call(['hdfs', 'dfs', '-rm', '-r', '-f', '-skipTrash', '/mysha/dz7/checkpoint'])
+Deleted /mysha/dz7/checkpoint
+0
+>>> 
+
+
+# не уходя из Spark, откроем сессию в Cassandra, создадим там схему dz_7, а в ней пустую таблицу wine_table:
+
+
+>>> import pandas as pd
+>>> from cassandra.cluster import Cluster
+>>> cluster = Cluster(['127.0.0.1']) 
+>>> session = cluster.connect()
+>>> 
+>>> session.execute(
+...     "CREATE KEYSPACE IF NOT EXISTS dz_7 "
+...     "WITH REPLICATION = { "
+...         "'class': 'SimpleStrategy', "
+...         "'replication_factor': 1 "
+...     "}"
+... )
+<cassandra.cluster.ResultSet object at 0x7fdb5e0489a0>
+>>> 
+>>> session.execute("USE dz_7")
+<cassandra.cluster.ResultSet object at 0x7fdb5e048370>
+>>> 
+>>> session.execute(
+...     'CREATE TABLE IF NOT EXISTS wine_table ('
+...         'offset BIGINT, '
+...         '"Type" VARCHAR, '
+...         'label DOUBLE, '
+...         'prediction DOUBLE, '
+...         'probability LIST<DOUBLE>, '
+...         'date TIMESTAMP, '
+...         'PRIMARY KEY (offset)'
+...     ')'
+... )
+<cassandra.cluster.ResultSet object at 0x7fdb5f204310>
+>>> 
+
+
+# напишем функцию для записи потока в Cassandra:
+
+
+>>> def cassandra_output_ckeckpointed(df, freq):
+...     return df.writeStream \
+...         .format("org.apache.spark.sql.cassandra") \
+...         .trigger(processingTime=f'{freq} seconds') \
+...         .option("table", "wine_table") \
+...         .option("keyspace", "dz_7") \
+...         .option("checkpointLocation", "/mysha/dz7/checkpoint") \
+...         .start()
+... 
+>>> 
+
+
+# и перед стримом надо будет изменить тип у колонки probability с Vector на Array[Double], иначе полезут ошибки. Сделаем это так:
+
+
+>>> def convert_to_list(vector):
+...     return vector.tolist()
+... 
+>>> 
+>>> convert_to_list_udf = F.udf(convert_to_list, ArrayType(DoubleType()))
+>>> 
+>>> df = df.withColumn("probability", convert_to_list_udf(df["probability"]))
+>>> 
+>>> df.printSchema()
+root
+ |-- offset: long (nullable = true)
+ |-- Type: string (nullable = true)
+ |-- label: double (nullable = false)
+ |-- prediction: double (nullable = false)
+ |-- probability: array (nullable = true)
+ |    |-- element: double (containsNull = true)
+ |-- date: timestamp (nullable = false)
+
+
+# теперь запустим стрим в таблицу Cassandra:
+
+
+>>> st = cassandra_output_ckeckpointed(df, 10)
+23/08/23 18:06:05 WARN ResolveWriteToStream: spark.sql.adaptive.enabled is not supported in streaming DataFrames/Datasets and will be disabled.
+>>> 23/08/23 18:06:07 WARN KafkaDataConsumer: KafkaDataConsumer is not running in UninterruptibleThread. It may hang when KafkaDataConsumer's methods are interrupted because of KAFKA-1894
+...
+>>> st.stop()
+
+
+# проверим, что у нас получилось. Для этого закроем подключение к Cassandra, Spark-сессию, зайдём в Cassandra напрямую и прочитаем несколько строк из заполненной таблицы:
+
+
+>>> session.shutdown()
+>>> cluster.shutdown()
+>>> exit()
+root@mysha-Inspiron-11-3147:/home/hsk# cqlsh
+Connected to Test Cluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.3 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+cqlsh> USE dz_7;
+cqlsh:dz_7> SELECT COUNT(*) FROM wine_table ALLOW FILTERING;
+
+ count
+-------
+   149
+
+(1 rows)
+
+Warnings :
+Aggregation query used without partition key
+
+cqlsh:dz_7> SELECT * FROM wine_table LIMIT 15;
+
+ offset | Type       | date                            | label | prediction | probability
+--------+------------+---------------------------------+-------+------------+------------------------
+    111 | White Wine | 2023-08-23 15:09:40.015000+0000 |     0 |          0 |   [0.953332, 0.046668]
+     19 | White Wine | 2023-08-23 15:06:30.019000+0000 |     0 |          0 |   [0.999689, 0.000311]
+     86 | White Wine | 2023-08-23 15:08:50.007000+0000 |     0 |          0 |   [0.985589, 0.014411]
+    148 |   Red Wine | 2023-08-23 15:10:50.016000+0000 |     1 |          1 |   [0.000395, 0.999605]
+     58 |   Red Wine | 2023-08-23 15:07:50.017000+0000 |     1 |          1 | [6.8029e-06, 0.999993]
+      2 | White Wine | 2023-08-23 15:06:06.349000+0000 |     0 |          0 |   [0.996548, 0.003452]
+     24 | White Wine | 2023-08-23 15:06:40.017000+0000 |     0 |          0 |   [0.999838, 0.000162]
+      3 | White Wine | 2023-08-23 15:06:06.349000+0000 |     0 |          0 |    [0.999916, 8.4e-05]
+    102 | White Wine | 2023-08-23 15:09:20.009000+0000 |     0 |          0 |   [0.993056, 0.006944]
+     83 |   Red Wine | 2023-08-23 15:08:40.007000+0000 |     1 |          1 |    [2.6e-05, 0.999974]
+     35 |   Red Wine | 2023-08-23 15:07:10.008000+0000 |     1 |          1 |   [0.038105, 0.961895]
+     54 | White Wine | 2023-08-23 15:07:40.012000+0000 |     0 |          0 |    [0.999958, 4.2e-05]
+     30 | White Wine | 2023-08-23 15:07:00.020000+0000 |     0 |          0 |   [0.979947, 0.020053]
+     79 | White Wine | 2023-08-23 15:08:30.011000+0000 |     0 |          0 |   [0.999314, 0.000686]
+    129 |   Red Wine | 2023-08-23 15:10:10.012000+0000 |     1 |          1 |    [8.7e-05, 0.999913]
+
+(15 rows)
+cqlsh:dz_7> 
+
+
+# видим, что данные в таблицу записались и всего в неё вошло 149 строк, а именно столько и было в топике. Всё получилось, ура.
+
+
