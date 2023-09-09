@@ -1,0 +1,435 @@
+ЗАДАНИЕ:
+
+Часть 1:
+1. Найти датасет для машинного обучения
+2. Реализовать простую предобработку
+3. Обучить модель используя Spark ML 
+4. Выгрузить модель в HDFS
+Часть 2:
+1. Реализовать Spark Streaming приложение, которое читает HDFS/Kafka
+2. Прочитать обученную модель (выгрузка в части 1 шаг 4) в этом приложении
+3. Спрогнозировать данные в потоке и выгрузить в Kafka/HDFS/Cassandra
+
+_________________________________________________
+
+РЕШЕНИЕ:
+
+
+# идём в Cassandra и создаём схему с пустой таблицей. Посмотрим на неё:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# cqlsh
+Connected to Test Cluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.3 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+cqlsh> 
+cqlsh> CREATE KEYSPACE IF NOT EXISTS dz8
+   ...     WITH REPLICATION = { 
+   ...         'class': 'SimpleStrategy',
+   ...         'replication_factor': 1 
+   ...     };
+cqlsh> 
+cqlsh> CREATE TABLE IF NOT EXISTS dz8.salary_prediction (
+   ...     id BIGINT,
+   ...     "Gender" VARCHAR,
+   ...     "Age" FLOAT,
+   ...     "Age Group" VARCHAR,
+   ...     "Education Level" VARCHAR,
+   ...     "Job Title" VARCHAR,
+   ...     "salary prediction" FLOAT,
+   ...     PRIMARY KEY (id)
+   ... );    
+cqlsh> 
+cqlsh> SELECT keyspace_name, table_name
+   ... FROM system_schema.tables 
+   ... WHERE keyspace_name = 'dz8';
+
+ keyspace_name | table_name
+---------------+-------------------
+           dz8 | salary_prediction
+
+(1 rows)
+cqlsh> 
+cqlsh> exit
+
+
+# создадим топик JobInformation, он будет хранить сообщения 864000000 миллисекунд, т.е. 10 дней:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-topics.sh --create --topic JobInformation --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1 --config retention.ms=864000000
+Created topic EmployeeInformation.
+
+
+# у нас есть два вот таких файла: df_age_gender.csv и df_education.csv, посмотрим на первые их строки:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -cat /mysha/dz8/df_age_gender.csv | head -n 5
+id,Age,Gender
+0,32.0,Male
+1,28.0,Female
+2,45.0,Male
+3,36.0,Female
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -cat /mysha/dz8/df_education.csv | head -n 5
+id,Education Level,Job Title,Years of Experience
+0,Bachelor's,Software Engineer,5.0
+1,Master's,Data Analyst,3.0
+2,PhD,Senior Manager,15.0
+3,Bachelor's,Sales Associate,7.0
+cat: Unable to write to output stream.
+
+
+# тот файл, который про должность, отправим в топик Kafka, предварительно переведя его из csv в JSON:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# /home/GeekBrains/csv_to_json.py /home/GeekBrains/df_education.csv 
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-producer.sh --topic JobInformation --bootstrap-server localhost:9092 < /home/GeekBrains/df_education.json
+root@mysha-Inspiron-11-3147:/home/hsk# kafka-console-consumer.sh --topic JobInformation --bootstrap-server localhost:9092 --from-beginning --max-messages 2
+{"id": 0, "Education Level": "Bachelor's", "Job Title": "Software Engineer", "Years of Experience": 5.0}
+{"id": 1, "Education Level": "Master's", "Job Title": "Data Analyst", "Years of Experience": 3.0}
+Processed a total of 2 messages
+
+
+# тот файл, который про возраст, в Spark-сессии мы зальём в созданную таблицу в Cassandra:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+23/08/27 00:48:23 WARN Utils: Your hostname, mysha-Inspiron-11-3147 resolves to a loopback address: 127.0.1.1; using 192.168.1.75 instead (on interface wlp1s0)
+23/08/27 00:48:23 WARN Utils: Set SPARK_LOCAL_IP if you need to bind to another address
+:: loading settings :: url = jar:file:/home/hsk/spark/jars/ivy-2.5.0.jar!/org/apache/ivy/core/settings/ivysettings.xml
+Ivy Default Cache set to: /root/.ivy2/cache
+The jars for the packages stored in: /root/.ivy2/jars
+org.apache.spark#spark-sql-kafka-0-10_2.12 added as a dependency
+org.apache.kafka#kafka-clients added as a dependency
+com.datastax.spark#spark-cassandra-connector_2.12 added as a dependency
+:: resolving dependencies :: org.apache.spark#spark-submit-parent-a6446259-16c8-4586-9698-608e89467ae3;1.0
+...
+:: resolution report :: resolve 4920ms :: artifacts dl 286ms
+...
+        :: evicted modules:
+        org.apache.kafka#kafka-clients;2.8.1 by [org.apache.kafka#kafka-clients;3.3.1] in [default]
+        org.slf4j#slf4j-api;1.7.32 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        com.google.code.findbugs#jsr305;3.0.0 by [com.google.code.findbugs#jsr305;3.0.2] in [default]
+        org.slf4j#slf4j-api;1.7.26 by [org.slf4j#slf4j-api;1.7.36] in [default]
+        ---------------------------------------------------------------------
+        |                  |            modules            ||   artifacts   |
+        |       conf       | number| search|dwnlded|evicted|| number|dwnlded|
+        ---------------------------------------------------------------------
+        |      default     |   33  |   0   |   0   |   4   ||   29  |   0   |
+        ---------------------------------------------------------------------
+:: retrieving :: org.apache.spark#spark-submit-parent-a6446259-16c8-4586-9698-608e89467ae3
+        confs: [default]
+        0 artifacts copied, 29 already retrieved (0kB/142ms)
+23/08/27 00:48:32 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+23/08/27 00:48:40 WARN Utils: Service 'SparkUI' could not bind on port 4040. Attempting port 4041.
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.3.1
+      /_/
+
+Using Python version 3.10.12 (main, Jun 11 2023 05:26:28)
+Spark context Web UI available at http://192.168.1.75:4041
+Spark context available as 'sc' (master = local[*], app id = local-1693086522837).
+SparkSession available as 'spark'.
+>>> 
+>>> df = spark.read.csv('/mysha/dz8/df_age_gender.csv', header=True, inferSchema=True)
+>>> df.printSchema()
+root
+ |-- id: integer (nullable = true)
+ |-- Age: double (nullable = true)
+ |-- Gender: string (nullable = true)
+
+>>> df.show(2)
++---+----+------+                                                                                                        
+| id| Age|Gender|
++---+----+------+
+|  0|32.0|  Male|
+|  1|28.0|Female|
++---+----+------+
+only showing top 2 rows
+
+>>> 
+
+# запишем:
+
+>>> df.write.format('org.apache.spark.sql.cassandra') \
+...     .options(table='salary_prediction', keyspace='dz8') \
+...     .mode('append') \
+...     .save()  
+
+# прочитаем:
+
+>>> job_df = spark.read.format("org.apache.spark.sql.cassandra") \
+...     .options(table="salary_prediction", keyspace="dz8") \
+...     .load()
+>>> 
+>>> job_df.show(5)
++---+----+---------+---------------+------+---------+-----------------+
+| id| Age|Age Group|Education Level|Gender|Job Title|salary prediction|
++---+----+---------+---------------+------+---------+-----------------+
+|328|31.0|     null|           null|Female|     null|             null|
+|165|27.0|     null|           null|  Male|     null|             null|
+|265|44.0|     null|           null|Female|     null|             null|
+|114|23.0|     null|           null|Female|     null|             null|
+|338|35.0|     null|           null|Female|     null|             null|
++---+----+---------+---------------+------+---------+-----------------+
+only showing top 5 rows
+
+>>> job_df.count()
+373
+>>> 
+
+
+# в топике записана информация о работе, а в таблице в Cassandra - информация о соикателе (пол и возраст) 
+# теперь в стриме мы будем построчно объединять топик с таблицей по полю id и перезаписывать строки в Cassandra, добавляя в них недостающие значения и предсказание зарплаты
+# для предсказания у нас уже сохранена модель с обученным алгоритмом случайного леса и поэтапной трансформацией столбцов, вот она:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# hdfs dfs -ls /mysha/dz8/model_RandomForestRegressor/
+Found 2 items
+drwxr-xr-x   - root supergroup          0 2023-09-09 13:32 /mysha/dz8/model_RandomForestRegressor/metadata
+drwxr-xr-x   - root supergroup          0 2023-09-09 13:33 /mysha/dz8/model_RandomForestRegressor/stages
+root@mysha-Inspiron-11-3147:/home/hsk# 
+
+
+# необходимый для создания батчевого стрима скрипт сохранён в файле dz_8_get_submit.py, прочитаем этот файл:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# cat /path/inside/container/lessons/8/dz_8/dz_8_get_submit.py
+#!/usr/bin/python3
+
+from pyspark.ml import Pipeline, PipelineModel
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, TimestampType
+from pyspark.sql import functions as F
+from pyspark.ml.regression import LinearRegression, RandomForestRegressor, GBTRegressor, LinearRegressionModel
+from pyspark.ml.feature import OneHotEncoder, VectorAssembler, CountVectorizer, StringIndexer, IndexToString
+from pyspark.ml.tuning import CrossValidatorModel
+import subprocess
+
+spark = SparkSession.builder.appName("solin_spark").getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
+
+# схема
+kafka_schema = StructType([
+    StructField("id", IntegerType()),
+    StructField("Education Level", StringType()),
+    StructField("Job Title", StringType()),
+    StructField("Years of Experience", FloatType())
+])
+
+
+# чтение данных из Kafka
+kafka_df = spark.readStream. \
+    format("kafka"). \
+    option("kafka.bootstrap.servers", "localhost:9092"). \
+    option("subscribe", "JobInformation"). \
+    option("startingOffsets", "earliest"). \
+    option("maxOffsetsPerTrigger", "1"). \
+    load()
+
+
+kafka_data = kafka_df.select(F.from_json(F.col("value").cast("String"), kafka_schema).alias("value")).select("value.*")
+
+# чтение данных из Cassandra
+cassandra_df = spark.read \
+    .format("org.apache.spark.sql.cassandra") \
+    .options(table="salary_prediction", keyspace="dz8") \
+    .load().drop('Job Title', 'Education Level')
+
+# объединение данных из Kafka и Cassandra по столбцу 'id'
+joined_df = kafka_data.join(cassandra_df, on="id", how="left") \
+    .select("id", "Age", "Gender", "Education Level", "Job Title", "Years of Experience")
+
+
+# загрузить обученную и сохранённую модель. Она ещё будет данные трансформировать, вот такая молодец:
+model = PipelineModel.load("hdfs://localhost:8020/mysha/dz8/model_RandomForestRegressor")
+
+
+def get_predict(df, model=model):
+    """здесь основная логика трансформации данных, добавления столбца с предсказанием и записи результата в Cassandra"""
+    print("вот что на входе:")
+    df.show()
+    # удалим id, так как модель о таком столбце ничего не знает
+    batch_id = df.select("id").first()["id"]
+    batch_id = str(df.select("id").first()["id"])
+    df = df.drop("id")
+    # добавим технических колонок
+    df = df.withColumn("Age Group", F.when(df["Age"] <= 30, "young")
+                                   .when((df["Age"] > 30) & (df["Age"] <= 45), "midage")
+                                   .otherwise("odl"))
+    df = df.withColumn("Title Length", F.length(df["Job Title"]))
+    # делаем предсказание и возвращаем id
+    df_preds = model.transform(df)
+    df_preds = df_preds.withColumn("id", F.lit(batch_id))
+    df_preds = df_preds.withColumnRenamed("prediction", "salary prediction")
+    df_preds = df_preds.select("id", "Age", "Age Group", "Education Level", "Gender", "Job Title", "salary prediction")
+    print("вот что на выходе:")
+    df_preds.show()
+    # записывает строку-батч в Cassandra
+    try:
+        df_preds.write \
+            .format("org.apache.spark.sql.cassandra") \
+            .options(table="salary_prediction", keyspace="dz8") \
+            .mode("append") \
+            .save()
+        print('данные записаны в табицу в Cassandra')
+        print('-----' * 20)
+    except:
+        print('строка не записалась')
+        print('-----' * 20)
+
+
+# функция для запуска стрима
+def foreach_batch_sink(df, model, drop_checkpoint=False):
+    if drop_checkpoint:
+        subprocess.call(['hdfs', 'dfs', '-rm', '-r', '-f', '-skipTrash', '/mysha/dz8/checkpoint'])
+
+    def process_batch(df_batch, batch_id):
+        get_predict(df_batch, model)
+
+    return df.writeStream \
+        .foreachBatch(process_batch) \
+        .trigger(processingTime='100 seconds') \
+        .option("checkpointLocation", "/mysha/dz8/checkpoint") \
+        .start()
+
+
+
+s = foreach_batch_sink(joined_df, model, drop_checkpoint=True)
+
+s.awaitTermination()
+
+root@mysha-Inspiron-11-3147:/home/hsk# 
+
+
+# запустим стрим и посмотрим в Cassandra на то, как будут заполняться строчки таблицы:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# cp /path/inside/container/lessons/8/dz_8/dz_8_get_submit.py .
+root@mysha-Inspiron-11-3147:/home/hsk# chmod +x dz_8_get_submit.py 
+root@mysha-Inspiron-11-3147:/home/hsk# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.apache.kafka:kafka-clients:3.3.1,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0 dz_8_get_submit.py 
+
+-- здесь будет написано много всего, а потом пойдёт стрим, вот такой:
+
+вот что на входе:
++---+----+------+---------------+-----------------+-------------------+
+| id| Age|Gender|Education Level|        Job Title|Years of Experience|
++---+----+------+---------------+-----------------+-------------------+
+|  0|32.0|  Male|     Bachelor's|Software Engineer|                5.0|
++---+----+------+---------------+-----------------+-------------------+
+
+вот что на выходе:
++---+----+---------+---------------+------+-----------------+-----------------+
+| id| Age|Age Group|Education Level|Gender|        Job Title|salary prediction|
++---+----+---------+---------------+------+-----------------+-----------------+
+|  0|32.0|   midage|     Bachelor's|  Male|Software Engineer|89978.14328707493|
++---+----+---------+---------------+------+-----------------+-----------------+
+
+данные записаны в табицу в Cassandra
+----------------------------------------------------------------------------------------------------
+вот что на входе:
++---+----+------+---------------+------------+-------------------+
+| id| Age|Gender|Education Level|   Job Title|Years of Experience|
++---+----+------+---------------+------------+-------------------+
+|  1|28.0|Female|       Master's|Data Analyst|                3.0|
++---+----+------+---------------+------------+-------------------+
+
+вот что на выходе:
++---+----+---------+---------------+------+------------+------------------+
+| id| Age|Age Group|Education Level|Gender|   Job Title| salary prediction|
++---+----+---------+---------------+------+------------+------------------+
+|  1|28.0|    young|       Master's|Female|Data Analyst|50627.799610929185|
++---+----+---------+---------------+------+------------+------------------+
+
+данные записаны в табицу в Cassandra
+----------------------------------------------------------------------------------------------------
+вот что на входе:
++---+----+------+---------------+--------------+-------------------+
+| id| Age|Gender|Education Level|     Job Title|Years of Experience|
++---+----+------+---------------+--------------+-------------------+
+|  2|45.0|  Male|            PhD|Senior Manager|               15.0|
++---+----+------+---------------+--------------+-------------------+
+
+вот что на выходе:
++---+----+---------+---------------+------+--------------+-----------------+
+| id| Age|Age Group|Education Level|Gender|     Job Title|salary prediction|
++---+----+---------+---------------+------+--------------+-----------------+
+|  2|45.0|   midage|            PhD|  Male|Senior Manager|167587.3013096585|
++---+----+---------+---------------+------+--------------+-----------------+
+
+данные записаны в табицу в Cassandra
+----------------------------------------------------------------------------------------------------
+
+
+# можем параллельно зайти в Cassandra и наблюдать за тем, как строки вместо null заполняются знаениями и к ним добавляется предсказание зарплаты:
+
+
+root@mysha-Inspiron-11-3147:/home/hsk# cqlsh
+Connected to Test Cluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.3 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+cqlsh> SELECT * FROM dz8.salary_prediction WHERE id IN (0, 1, 2, 3, 4, 5);
+
+ id | Age | Age Group | Education Level | Gender | Job Title | salary prediction
+----+-----+-----------+-----------------+--------+-----------+-------------------
+  0 |  32 |      null |            null |   Male |      null |              null
+  1 |  28 |      null |            null | Female |      null |              null
+  2 |  45 |      null |            null |   Male |      null |              null
+  3 |  36 |      null |            null | Female |      null |              null
+  4 |  52 |      null |            null |   Male |      null |              null
+  5 |  29 |      null |            null |   Male |      null |              null
+
+(6 rows)
+cqlsh> SELECT * FROM dz8.salary_prediction WHERE id IN (0, 1, 2, 3, 4, 5);
+
+ id | Age | Age Group | Education Level | Gender | Job Title         | salary prediction
+----+-----+-----------+-----------------+--------+-------------------+-------------------
+  0 |  32 |    midage |      Bachelor's |   Male | Software Engineer |       89978.14062
+  1 |  28 |     young |        Master's | Female |      Data Analyst |       50627.80078
+  2 |  45 |      null |            null |   Male |              null |              null
+  3 |  36 |      null |            null | Female |              null |              null
+  4 |  52 |      null |            null |   Male |              null |              null
+  5 |  29 |      null |            null |   Male |              null |              null
+
+(6 rows)
+cqlsh> SELECT * FROM dz8.salary_prediction WHERE id IN (0, 1, 2, 3, 4, 5);
+
+ id | Age | Age Group | Education Level | Gender | Job Title         | salary prediction
+----+-----+-----------+-----------------+--------+-------------------+-------------------
+  0 |  32 |    midage |      Bachelor's |   Male | Software Engineer |       89978.14062
+  1 |  28 |     young |        Master's | Female |      Data Analyst |       50627.80078
+  2 |  45 |    midage |             PhD |   Male |    Senior Manager |        1.6759e+05
+  3 |  36 |    midage |      Bachelor's | Female |   Sales Associate |       63018.61328
+  4 |  52 |      null |            null |   Male |              null |              null
+  5 |  29 |      null |            null |   Male |              null |              null
+
+(6 rows)
+cqlsh> SELECT * FROM dz8.salary_prediction WHERE id IN (0, 1, 2, 3, 4, 5);
+
+ id | Age | Age Group | Education Level | Gender | Job Title         | salary prediction
+----+-----+-----------+-----------------+--------+-------------------+-------------------
+  0 |  32 |    midage |      Bachelor's |   Male | Software Engineer |       89978.14062
+  1 |  28 |     young |        Master's | Female |      Data Analyst |       50627.80078
+  2 |  45 |    midage |             PhD |   Male |    Senior Manager |        1.6759e+05
+  3 |  36 |    midage |      Bachelor's | Female |   Sales Associate |       63018.61328
+  4 |  52 |       odl |        Master's |   Male |          Director |        1.9999e+05
+  5 |  29 |      null |            null |   Male |              null |              null
+
+(6 rows)
+cqlsh> 
+
+
+# всё получилось! По шагам, что было сделано:
+
+1) подготовлена PipelineModel, включающая в себя предобработку, трансформации датасета и алгоритм случайного леса 
+2) модель обучена при с подбором лучших параметров по CrossValidator и ParamGridBuilder и сохранена в HDFS
+3) написано Spark Scructured Streaming-приложение, которое читает данные в Foreach Batch-стриме из Kafka и Cassandra, 
+    в потоке объединяет разные таблицы, добавляет к ним столбец с предсказанием и всё это записывает в БД Cassandra по id
+4) выполнена проверка работы приложения - всё работает, ура
+
